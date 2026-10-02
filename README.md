@@ -1,4 +1,4 @@
-# a8-ext: game extensions for atari800
+# a8ext: game extensions for atari800
 
 Scripts that change how particular Atari 8-bit games look and run inside the
 [atari800](https://github.com/MarcinZukowski/atari800) emulator: scenes drawn
@@ -7,18 +7,20 @@ maps, and so on. Each directory here is one game's extension, with notes on
 how the game works inside (`<name>/<name>.md`).
 
 The extensions are JavaScript. The emulator's fork provides the framework
-that runs them: hooks into the emulated machine, an `a8` object for its
-memory and registers and a `gl` object for drawing. Its API reference is
-`data/ext/README.md` in that repository; this one holds only the games.
+that runs them, on its `better-yoomp` branch: hooks into the emulated
+machine, an `a8` object for its memory and registers and a `gl` object for
+drawing. Its API reference is
+[data/ext/README.md](https://github.com/MarcinZukowski/atari800/blob/better-yoomp/data/ext/README.md)
+in that repository; this one holds only the games.
 
 ## Running them
 
 **In the emulator.** Build the fork with `--with-ext` (see its README), then
 point it at this directory:
 
-    atari800 -ext-dir /path/to/a8-ext
+    atari800 -ext-dir /path/to/a8ext
 
-or put `EXT_DIR=/path/to/a8-ext` in the emulator's configuration file. Start
+or put `EXT_DIR=/path/to/a8ext` in the emulator's configuration file. Start
 a game and press TAB: the extension whose fingerprint matches the program in
 memory is offered with its options.
 
