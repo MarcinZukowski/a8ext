@@ -55,7 +55,7 @@ screen line 24 (*measured*: every 4-line block is uniform, horizontal runs
 are multiples of four pixels). The shared smoother (../smooth2d.js) reads
 that grid back from the framebuffer, upscales it with Scale2x twice and draws
 it over the scene while the display list is `$1F80` with a buffer at `$1000`
-or `$1800`. "Smooth picture" in the menu.
+or `$1800`. "Smooth objects" in the menu.
 
 ## The 3D engine: sectors
 
@@ -214,7 +214,7 @@ the far hills; black indoors).
 
 Three more options, each on its own:
 
-* "Whole picture": the view fills the emulator's whole picture instead of
+* "Full screen": the view fills the emulator's whole picture instead of
   the demo's 320 x 192 rectangle, at the same scale, so it shows two columns
   more on each side and six rows more above and below (the frustum and the
   backdrop are extended; beyond the backdrop's tile its first and last rows

@@ -28,10 +28,10 @@ export default {
 
 	menu: {
 		ACCEL: { label: "Acceleration:", options: ["OFF", "ON"], current: 1 },
-		SMOOTH: { label: "Smooth picture:", options: ["OFF", "Scale2x 4x"], current: 1 },
+		SMOOTH: { label: "Smooth objects:", options: ["OFF", "Scale2x 4x"], current: 1 },
 		WORLD: { label: "3D scene:", options: ["Atari", "OpenGL"], current: 1 },
 		SHADE: { label: "Shading and fog:", options: ["OFF", "ON"], current: 1 },
-		FULL: { label: "Whole picture:", options: ["OFF", "ON"], current: 1 },
+		FULL: { label: "Full screen:", options: ["OFF", "ON"], current: 1 },
 		GROUND: { label: "Ground texture:", options: ["OFF", "ON"], current: 1 },
 		ANTIALIAS: { label: "Smooth edges:", options: ["OFF", "ON"], current: 1 },
 		RATE: { label: "Log frame rate:", options: ["OFF", "ON"], current: 0 },
