@@ -21,7 +21,7 @@ all:
 	@echo "Built $(OUT) with atari800 at $$(git -C $(ATARI800) rev-parse --short HEAD) (tested with $$(cut -c1-8 ATARI800_VERSION))"
 
 serve: all
-	cd $(OUT) && python3 -m http.server 8800
+	python3 $(ATARI800)/web/serve.py $(OUT) 8800
 
 clean:
 	rm -rf $(OUT)
