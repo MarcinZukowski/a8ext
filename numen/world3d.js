@@ -141,7 +141,7 @@ function readWorld() {
 	const sectors = [];
 	for (let s = 0; s < count; s++) {
 		const start = mem[EDGE_START + s], end = mem[EDGE_START + s + 1];
-		if (end < start + 3 || end > 0x80) return null;
+		if (end < start + 3) return null;   // (a byte: the vertex tables hold 256)
 		const points = [], edges = [];
 		for (let k = start; k < end; k++) points.push([word(VERTEX_X_LO, VERTEX_X_HI, k), word(VERTEX_Z_LO, VERTEX_Z_HI, k)]);
 		for (let k = start; k < end; k++) {
