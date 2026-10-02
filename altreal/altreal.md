@@ -447,6 +447,12 @@ N and Z, and returns RTS in place of the wrapper's first instruction. The
 checksum then always passes and the prompt never appears. Images that are
 missing fall through to the real drive.
 
+In the web build the images cannot come with the site. There the extension
+adds a file picker to its panel in the page (`a8.host` is `"web"`, `a8.panel`
+its element): the player chooses their own five `.atr` files once, they are
+written under the names above through the same `std` file calls, and the page
+keeps what is written in the browser's local storage.
+
 ## Hot spots
 
 Instruction frequencies over a walk, from the monitor's profile, which is

@@ -13,6 +13,7 @@
 // altreal.md, "The disks".
 
 import * as std from "std";
+import * as os from "os";
 
 const DISK_READ = 0x248E;                 // the read-sector wrapper: intercept here
 const DISK_CODE = 0x1905, SECTOR_LO = 0x232, SECTOR_HI = 0x233;
@@ -21,11 +22,9 @@ const SECTOR_SIZE = 128, ATR_HEADER = 16;
 
 // The images: side n of the set is "(v1,sn)"; disk 1 has one side, disks 2
 // and 3 two each
-const DIR = a8.extDir + "/";
-function sideFile(disk, side) {
-	const n = disk === 1 ? 1 : disk === 2 ? 1 + side : 3 + side;
-	return `${DIR}Alternate Reality The Dungeon (v1,s${n}).atr`;
-}
+const DIR = a8.extDir + "/", SIDES = 5;
+const sideName = (n) => `${DIR}Alternate Reality The Dungeon (v1,s${n}).atr`;
+const sideFile = (disk, side) => sideName(disk === 1 ? 1 : disk === 2 ? 1 + side : 3 + side);
 
 const images = new Map();   // "disk,side" -> Uint8Array of the sectors, or null when the file is missing
 
@@ -50,9 +49,56 @@ function image(disk, side) {
 	return data;
 }
 
+// In a browser the images cannot come with the site, so the player supplies
+// their own: a file picker in the extension's panel (a8.panel) takes the five
+// .atr files and writes them under the names above. The page keeps written
+// files, so they are chosen once. Which side a file is goes by its name (the
+// "s3" of "(v1,s3)", else the last digit 1-5 in it, else the first side still
+// missing).
+const present = (n) => { const f = std.open(sideName(n), "rb"); if (f === null) return false; f.close(); return true; };
+function sideOfFile(name) {
+	const base = name.replace(/\.atr$/i, ""), tagged = /s([1-5])\)?$/i.exec(base), digits = base.match(/[1-5]/g);
+	if (tagged) return +tagged[1];
+	if (digits) return +digits[digits.length - 1];
+	for (let n = 1; n <= SIDES; n++) if (!present(n)) return n;
+	return 1;
+}
+function diskPanel() {
+	if (a8.host !== "web" || a8.panel === null) return;
+	const status = document.createElement("div"), input = document.createElement("input"), forget = document.createElement("button");
+	const refresh = () => {
+		const have = [];
+		for (let n = 1; n <= SIDES; n++) if (present(n)) have.push(n);
+		status.textContent = have.length === SIDES ? "Disk images: all five sides, no swapping."
+			: `Disk images: ${have.length ? "sides " + have.join(", ") : "none"}. Choose the game's five .atr files to play without swapping; they stay in this browser.`;
+		forget.hidden = have.length === 0;
+	};
+	input.type = "file"; input.multiple = true; input.accept = ".atr";
+	input.addEventListener("change", async () => {
+		for (const file of input.files) {
+			const bytes = new Uint8Array(await file.arrayBuffer()), n = sideOfFile(file.name);
+			const f = std.open(sideName(n), "wb");
+			f.write(bytes.buffer, 0, bytes.length); f.close();
+			console.log(`altreal: ${file.name} is side ${n}`);
+		}
+		images.clear();   // look for the files again
+		input.value = ""; input.blur();
+		refresh();
+	});
+	forget.textContent = "Forget the disk images";
+	forget.addEventListener("click", () => {
+		for (let n = 1; n <= SIDES; n++) os.remove(sideName(n));
+		images.clear(); forget.blur();
+		refresh();
+	});
+	a8.panel.append(status, input, forget);
+	refresh();
+}
+
 export const disks = {
 	served: 0,          // sectors served so far
 	last: "",           // "disk d side s sector n"
+	panel: diskPanel,   // call on activation
 
 	hooks: [DISK_READ],
 

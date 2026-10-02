@@ -87,6 +87,7 @@ export default {
 
 	onActivate() {
 		gameStep = mem[STEP_SIZE];
+		disks.panel();   // in a browser: where the player supplies the disk images
 	},
 
 	// Counts calls to $7856 (once per drawn frame), used for the FPS display
