@@ -1,0 +1,10 @@
+# the built site, and local settings
+dist/
+config.mk
+
+# kept by the user, not by the repository: Alternate Reality's disk images and the maps drawn while playing
+altreal/*.atr
+altreal/maps/
+*.pdf
+
+.DS_Store

@@ -1,203 +1,49 @@
-# atari800 extensibility ideas
+# a8-ext: game extensions for atari800
 
-A while ago I saw this [thread on AtariArea](http://www.atari.org.pl/forum/viewtopic.php?id=17319).
+Scripts that change how particular Atari 8-bit games look and run inside the
+[atari800](https://github.com/MarcinZukowski/atari800) emulator: scenes drawn
+again in 3D from the games' own data, faster drawing, smoother pictures,
+maps, and so on. Each directory here is one game's extension, with notes on
+how the game works inside (`<name>/<name>.md`).
 
-It gave me an idea to add a generic extension mechanism to atari800.
-I started playing, and over a course of a few weeks, an hour here, an hour there, I wrote a bunch
-of code and extensions for some Atari games.
+The extensions are JavaScript. The emulator's fork provides the framework
+that runs them: hooks into the emulated machine, an `a8` object for its
+memory and registers and a `gl` object for drawing. Its API reference is
+`data/ext/README.md` in that repository; this one holds only the games.
 
-## How it works
+## Running them
 
-Extensions are JavaScript modules, one per game in `data/ext/<name>/init.js`, run by an
-embedded [QuickJS](https://bellard.org/quickjs/) engine. The emulator side (`src/ext.c`) is
-small: it keeps the list of extensions, activates the one whose memory fingerprint matches
-the running program (TAB opens the extensions menu, or see `A8_EXT_SELECT` under Testing),
-handles the ALT (extensions off) and CTRL (acceleration off) keys, and calls the extension's
-hooks from a few places in the emulator:
+**In the emulator.** Build the fork with `--with-ext` (see its README), then
+point it at this directory:
 
-* before an Atari frame is converted for OpenGL (`onPreGlFrame`), e.g. to write onto the Atari screen
-* after the Atari frame was drawn (`onPostGlFrame`), e.g. to render extra content with OpenGL
-* once per frame regardless of the video output (`onFrame`)
-* when the CPU is about to execute one of the addresses the extension asked for (`onCodeInjection`).
-  The hook can let the instruction run, run the routine on a "fake CPU" so that it costs no
-  emulated time, or skip it and do the work itself in JavaScript.
+    atari800 -ext-dir /path/to/a8-ext
 
-The scripting side (`src/ext-js.c`, `src/sdl/video_gl-js.c`) exposes the `a8` and `gl` globals
-described below; `src/sdl/sfx.c` mixes the extensions' sound effects into the emulator's audio.
+or put `EXT_DIR=/path/to/a8-ext` in the emulator's configuration file. Start
+a game and press TAB: the extension whose fingerprint matches the program in
+memory is offered with its options.
 
-## JavaScript scripting
+**In a browser.** The fork also builds as a web page that runs the same
+scripts. `make` here builds that page with these extensions into `dist/`
+(it needs Emscripten and a checkout of the fork):
 
-Extensions are enabled with `--with-ext` when running `configure`. QuickJS needs to be
-installed (e.g. `brew install quickjs`) with `CPPFLAGS`/`LDFLAGS` pointing at it.
-Not all emulator functionality is exposed; more can easily be added.
+    make ATARI800=/path/to/atari800     # or set ATARI800 in config.mk
+    make serve                          # http://localhost:8800
 
-At startup atari800 looks for files matching `data/ext/*/init.js`
-(e.g. [data/ext/zybex/init.js](zybex/init.js)), evaluates each as an ES module and
-registers its default export as an extension. Shared helpers live in
-[common.js](common.js) and are imported the usual way:
+Everything in `site/` is copied into `dist/` as well: put a `demos.json`
+there, and the programs it lists, to have them offered on the page (the
+format is in the fork's `web/README.md`). Mind the rights before publishing
+programs: a saved state contains the game and the operating system ROM it
+was saved with.
 
-```js
-import { drawQuad, word, rgb } from "../common.js";
-```
+`ATARI800_VERSION` names the commit of the fork these scripts were last
+tested with.
 
-The QuickJS `std` and `os` modules and `console.log()` are available too.
-A script error prints the exception with its stack trace and exits the emulator.
+## Layout
 
-Two globals form the API (see [ext-js.c](../../src/ext-js.c) and
-[sdl/video_gl-js.c](../../src/sdl/video_gl-js.c) for details):
-
-### `a8` - the emulator
-
-* `a8.mem` - a `Uint8Array` over the 64 KB of Atari memory, read/write, no copy:
-  ```js
-  const lives = a8.mem[0x00C0];
-  a8.mem[0x00C0] = 9;                 // stores wrap to a byte, like a C uint8_t
-  a8.mem.fill(0xEA, 0xB3B0, 0xB3B6);  // NOP out six bytes
-  ```
-  Intermediate values are plain numbers, so mask them yourself: `(a + b) & 0xFF`.
-* `a8.palette` - an `Int32Array` over the current palette, `0x00RRGGBB` per Atari colour;
-  `a8.rgb(colour)` returns `[r, g, b]` in 0..255
-* `a8.peek(addr)`, `a8.poke(addr, value)` - memory access that honours bank switching, ROM and
-  hardware registers; use them instead of `a8.mem` for screen memory under the OS ROM or for I/O
-* `a8.cpu.a`, `a8.cpu.x`, `a8.cpu.y`, `a8.cpu.s`, `a8.cpu.p`, `a8.cpu.pc` - the 6502 registers,
-  read/write; they are current inside `onCodeInjection`, where changes take effect on return
-* `a8.antic.dlist`, `a8.antic.hscrol`, `a8.antic.vscrol`, `a8.antic.chbase` - ANTIC registers
-* `a8.profile(what)` - the monitor's profile as a `Float64Array` of 65536 entries: how many times
-  the instruction at each address ran (`"count"`, the default) or the cycles it took (`"cycles"`),
-  since the start or the last `a8.profileReset()`; `null` when the emulator was built without
-  `--enable-monitorprofile`. For finding the routines worth accelerating with `a8.fakeCpuUntil*`
-* `a8.xeBank(n)` - bank `n` of the extended (XE) memory as a 16 KB `Uint8Array` (zero copy), or
-  `null` when the machine has none. A program that does not use extended memory leaves the banks
-  free, and they are saved in state files, so data kept there follows the game's save and load
-* `a8.antic.pmbase`, `a8.antic.dmactl` - player/missile base and DMA control
-* `a8.gtia.colbk`, `a8.gtia.colpf0`..`colpf3`, `a8.gtia.colpm0`..`colpm3` - GTIA colour registers
-* `a8.gtia.hposp0`..`hposp3`, `sizep0`..`sizep3`, `grafp0`..`grafp3`, `prior`, `gractl` - GTIA
-  player registers (as last written; a game's interrupts may change them within a frame)
-* "Fake CPU" functions and constants for use inside `onCodeInjection`:
-  * `a8.OP_RTS`, `a8.OP_NOP` - 6502 opcodes
-  * `a8.fakeCpuUntilPc(pc)` - run the CPU (without side effects on the machine) until reaching address `pc`
-  * `a8.fakeCpuUntilOp(op)` - run the CPU until reaching opcode `op` (e.g. `a8.OP_RTS`)
-  * `a8.fakeCpuUntilAfterOp(op)` - the same, but also execute that opcode (e.g. return from the routine)
-  * `a8.fakeCpuWhileIn(lo, hi, maxInstructions = 1000000)` - runs the current instruction and the
-    following ones in no emulated time while the PC stays in `lo..hi`, up to the budget; returns the
-    number of instructions run, negative when the budget ran out (a loop waiting for an interrupt
-    or VCOUNT cannot end this way)
-  * `a8.setCodeInjections([addresses])` - replaces, at run time, the addresses `onCodeInjection` is
-    called for; with `a8.profile()` these make `createAccelerator()` in [common.js](common.js)
-    possible, which runs a program's hottest code in no emulated time
-* `a8.printFps(value, fg, bg, x, y)` - counts frames (a change of `value` is a new frame)
-  and prints the rate on the Atari screen at `x, y`. Typically called from `onPreGlFrame`
-* `a8.accelerationDisabled()` - true while CTRL is held
-* `a8.recordVideo(path)` starts a video recording into that `.avi` file, as the emulator's "Record
-  video" does, and returns whether it started; `a8.stopRecording()` ends it. With the OpenGL display
-  and an extension active the video is the display's own picture in true colour, with everything the
-  extension draws (see "Recording" below)
-* `a8.loadSound(path)` - loads a WAV file; the result has a `play()` method.
-  The sound is mixed on top of the POKEY output
-
-### `gl` - OpenGL
-
-* Legacy OpenGL calls without the `gl` prefix: `gl.Enable`, `gl.Disable`, `gl.Begin`, `gl.End`,
-  `gl.Color4f`, `gl.TexCoord2f`, `gl.Vertex3f`, `gl.Normal3f`, `gl.BlendFunc`, `gl.BindTexture`,
-  `gl.TexParameteri`, `gl.MatrixMode`, `gl.PushMatrix`, `gl.PopMatrix`, `gl.LoadIdentity`,
-  `gl.Translatef`, `gl.Scalef`, `gl.Rotatef`, `gl.Ortho`, `gl.Frustum`, `gl.Viewport`, `gl.Scissor`,
-  `gl.Clear`, `gl.ClearColor`, `gl.Fogf`, `gl.Fogfv(pname, [values])`, `gl.Lightfv(light, pname, [values])`,
-  `gl.LineWidth`, `gl.PolygonMode`, `gl.PushAttrib`, `gl.PopAttrib`, `gl.GetIntegerv(pname)` (returns an array)
-* Constants without the `GL_` prefix, like WebGL: `gl.TEXTURE_2D`, `gl.BLEND`, `gl.DEPTH_TEST`,
-  `gl.QUADS`, `gl.SRC_ALPHA`, `gl.VIEWPORT`, ... (see the `C(...)` list in `video_gl-js.c`)
-* The framebuffer is multisampled where the system has it (four samples), so polygon edges are
-  smooth; `gl.Disable(gl.MULTISAMPLE)` turns that off, `gl.GetIntegerv(gl.SAMPLES)` tells how many
-* Recording: the emulator's video recording used to hold the Atari's screen only (8 bits a pixel
-  with the Atari palette), so nothing an extension draws. Now the source can be the display:
-  `-vsource auto|atari|display` (`VIDEO_SOURCE` in the configuration file). `display` records
-  what the OpenGL display shows, read back after the extensions have drawn, in true colour at the
-  size the picture has in the window as the recording starts; `auto`, the default, does so when
-  an extension is active at that moment and records the Atari screen otherwise. True colour is
-  encoded as Motion-PNG whatever codec is set (the others are 8-bit), with fast compression: about
-  8 MB a second at 672 x 480, in real time. The picture lags the sound by one frame
-* `gl.createTexture(width, height)` and `gl.loadTextureRGBA(path, width, height)` return a `Texture`:
-  * `pixels` - a `Uint8Array` that *is* the RGBA texture memory (4 bytes per pixel)
-  * `width`, `height`, `id` (the OpenGL texture name)
-  * `finalize()` - uploads `pixels` to OpenGL; call it before drawing and after every change.
-    For mipmaps, bind the texture and set `gl.GENERATE_MIPMAP` to `gl.TRUE` before it, then
-    choose a `*_MIPMAP_*` minification filter ([altreal/view3d.js](altreal/view3d.js) does)
-  * `draw(texL, texR, texT, texB, scrL, scrR, scrT, scrB, z = -2)` - draws the texture on a quad
-* `gl.drawTriangles(positions, normals)` - draws `GL_TRIANGLES` from flat `Float32Array`s (x, y, z
-  per vertex; `normals` may be omitted) in a single call. [yoomp/obj.js](yoomp/obj.js) loads
-  Wavefront `.obj`/`.mtl` models into that form
-* `gl.readPixels(x, y, width, height)` - the framebuffer as a `Uint8Array` of RGBA bytes, rows
-  bottom-up, in window pixels; for test scripts that want to look at what was drawn
-* [smooth2d.js](smooth2d.js): `createSmoother(pixelW, pixelH)` reads a screen region back at a game's
-  pixel grid, upscales it with Scale2x twice and draws it over its place (Alternate Reality, Numen)
-* `gl.drawScreen(x0, y0, x1, y1, left, right, top, bottom, z = -2)` - draws that region of the
-  emulated screen (pixels of the displayed area, y down; `gl.screenSize()` gives its size) onto
-  a rectangle in GL coordinates, with linear filtering: for rearranging the game's screen, like
-  the wide layout of Alternate Reality
-
-### The extension object
-
-Each `init.js` exports the extension object as its default export (`export default { ... }`)
-with these properties. Hook methods are called with `this` bound to that object, so it
-doubles as the extension's state:
-
-* `name` - shown in the extensions menu
-* `fingerprint: { address, bytes }` - the extension is activated when the bytes at `address`
-  in Atari memory equal `bytes`
-* `onActivate()` (optional) - called once the fingerprint matched, with the program in memory
-* `onFrame()` (optional) - called once per Atari frame, with or without OpenGL (headless runs too)
-* `onPreGlFrame()` (optional) - called before the Atari screen is converted for OpenGL
-* `onPostGlFrame()` (optional) - called after the Atari screen was drawn; draw extra things here
-* `codeInjections: [addresses]` with `onCodeInjection(pc, op)` (optional, together) - called
-  whenever the CPU is about to execute one of the addresses. Return the opcode to execute:
-  usually `op`, or e.g. `a8.fakeCpuUntilOp(a8.OP_RTS)` to skip a routine
-* `menu: { KEY: { label, options, current }, ... }` (optional) - entries of the extension's menu
-  (TAB in the emulator). `options` is an array of strings and `current` the 0-based index
-  of the selected one; the framework updates `current` when the user cycles through the options
-
-### Testing
-
-`A8_EXT_SELECT=<part of the name>` in the environment activates the matching extension as
-soon as its fingerprint matches, without going through the TAB menu:
-
-    A8_EXT_SELECT=ZYBEX build/src/atari800 -state zyb.a8s
-
-Input can be scripted with atari800's `-playback file` (`-playbacknoexit` keeps running at
-the end). The file is plain text: the line `Atari800 event recording, version: 1`, one line
-with the POKEY random seed (`0`), then per frame eight lines: `key shift consol` (`-1 0 7`
-for nothing), the ports 0/1 and 2/3 joystick bytes (`255` centred; stick 0 forward is `254`,
-right `247`), four trigger lines (`1` = released) and a screen checksum (`00000000`, the
-mismatch is only logged). This is how the walks in the Alternate Reality notes were measured.
-
-Tests that do not need the OpenGL view can run without a window: SDL's dummy drivers
-(`SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy`) with `-no-video-accel` give a software video mode
-and no display at all. Only `onFrame` and `onCodeInjection` run then (the GL hooks hang off the
-OpenGL frame), and a script can still read the screen memory through the display list to check
-what the game shows.
-
-## Technicalities
-
-This work was a quick hack, without paying much respect to things like
-maintainability, portability etc.
-
-Some notes:
-* It was designed to work only with the SDL 1.2/OpenGL backend.
-  * A lot of functionality had to be added there
-* A bunch of small injections had to be made in multiple places.
-* The extension code is C99, so `--with-ext` builds drop upstream's `-ansi -pedantic` flags.
-* Developed, and only tested on MacOSX.
-  * A `tools/ext-helper` script exists for simplifying compilation, very specific to my setup
-    ```
-    tools/ext-helper bootstrap
-    tools/ext-helper install
-    ```
-
-## In the browser
-
-The same scripts run in a web page: [web/](../../web/README.md) builds the emulator core as a
-WebAssembly module and a page that hosts the extensions, with `a8` made of the module's memory
-and `gl` implemented on WebGL 2. An extension needs nothing special for it, as long as it keeps
-to the API above: the files it reads must be in its own directory (they are fetched when it is
-activated), and what it draws must go through `gl`.
+* `<name>/init.js` - an extension: its default export is the extension object
+* `<name>/*.js`, data files - what it imports and loads; it finds them through `a8.extDir`
+* `<name>/<name>.md` - notes on the game's internals
+* `common.js`, `smooth2d.js` - helpers shared by the extensions
 
 # Games extended (in order of creation)
 
@@ -278,7 +124,7 @@ The best way to detect where the time is going is to use the
 * type: `trace` - this stops the recording
 * type: `quit`
 
-Now, you can use the provided helper tool to analyze the `file.trace`, by running:
+Now, you can use the helper tool in the emulator's fork to analyze the `file.trace`, by running:
 
     tools/trace-postprocess.py < file.trace
 
