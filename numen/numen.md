@@ -18,6 +18,19 @@ code alone.
 * Two frame buffers: the LMS operand at `$1F84`/`$1F85` flips between `$1000`
   and `$1800`. Counting the flips gives the rendered frame rate: about 3 a
   second as the demo stands.
+* The end part (the credits room) shows lines of text above and below the
+  scene from a second display list at `$F140`: 2 blank lines, 20 mode-F rows
+  with LMS and HSCROL (the text, 70 bytes a line), 2 blank lines, then the
+  scene's rows as in the list above (so the scene stays at lines 24-215),
+  then 24 more lines of text. The two lists alternate (the text is shown
+  for about 120 frames, then the plain list for three). The NMI handler's
+  `JMP` at `$FF89` is repointed within a frame between the text's DLI
+  handler (`$F200`) and the scene's (`$1FBB`), and the text's DLIs leave
+  GTIA in a text mode (PRIOR 1), so at the end of the frame the registers
+  are not the scene's. The extension finds the scene in whatever list is
+  shown (the mode-F rows after an LMS to `$1000` or `$1800`, four lines
+  each) and takes GTIA's registers at the DLIs, keeping the last seen in a
+  GTIA mode.
 * The OS ROM is off; the NMI vector points at `$FF83` (RAM under the OS),
   the extension's fingerprint. The machine has extended memory, and the
   demo banks it in at `$4000`-`$7FFF`.
@@ -125,10 +138,22 @@ The walls on an edge (*read* at `$61ED`-`$6411`, *measured* by redrawing):
 no neighbour: one wall from floor to ceiling; a neighbour with a higher floor:
 a wall up to that floor; a neighbour with a lower ceiling: a wall down to that
 ceiling, unless both sectors are open to the sky. An outer edge of colour 0
-gets no wall: its columns are filled with the floor's colour up to the horizon
-row and with the backdrop above it, as if the floor went on for ever
-(*measured*: the picture's columns there equal the backdrop down to the
-horizon row exactly, and the floor's colour below).
+gets no wall. Under the sky its columns are filled with the floor's colour
+up to the horizon row and with the backdrop above it, as if the floor went
+on for ever (*measured*: the picture's columns there equal the backdrop
+down to the horizon row exactly, and the floor's colour below). Under a
+ceiling nothing is drawn there and the columns stay black (*measured*: the
+end part's exit, the doorway at x = 0 of its level, is a black rectangle
+between the doorway's walls, floor and ceiling).
+
+The end level's room (sector 0, 24 vertices) has three holes that touch
+its outline: the door's block along the left wall, sharing an edge with
+it, and two posts at the far wall, sharing a vertex each.
+
+The sprites are painted after the walls, over them, when their sector was
+drawn: the exit sign (object 10, type 2, 17 x 7, anchored at height 103,
+42 high: from 103 up to 82) hangs where the door's block (sector 36,
+ceiling 80, floor 108) would hide its lower half, and shows whole.
 
 ### Colours
 
@@ -202,12 +227,17 @@ where the ground begins.
 world3d.js reads those tables (once, and again when a sum over them
 changes: another level) and draws the level with the demo's camera at the
 window's resolution: floors and ceilings as triangles (ear clipping, holes
-bridged to the outer loop), walls as quads, the floor carried on beyond open
-outer edges as a fan from the camera through each edge (the columns the demo
-fills), sprites as upright cards facing the camera with their pictures scaled
-up with Scale2x, the backdrop as a scrolling layer behind. A dither is drawn
-as the mix of its two colours. The projection is the demo's: a frustum with
-the eye level at the horizon row, heights scaled by four.
+bridged to the outer loop, or spliced into it where they touch it), walls
+as quads, the floor carried on beyond open outer edges under the sky as a
+fan from the camera through each edge (the columns the demo fills; under a
+ceiling such an edge is a black wall), sprites as upright cards facing the
+camera with their pictures scaled up with Scale2x, drawn after the walls
+without the depth test when a straight line from the camera to their place
+crosses no wall (the demo paints them over the walls whenever their sector
+was drawn), the backdrop as a scrolling layer behind. A dither is drawn as
+the mix of its two colours. The projection is the demo's: a frustum with
+the eye level at the horizon row, heights scaled by four. The scene's
+rectangle and GTIA's registers come from init.js (see The screen).
 
 The camera glides: the demo gives a new position a few times a second (some
 thirty with the acceleration), and the view moves from each to the next over

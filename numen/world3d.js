@@ -57,9 +57,10 @@ export const engineMapped = () => mem[0x6611] === 0x20 && mem[0x6612] === 0xF6 &
 // background, 12-15 the playfields again. Mode 9 (the maze): a luminance of
 // the background's hue. Mode 11: a hue at the background's luminance.
 // same: the lowest pixel value that looks the same (for the scaler);
-// colour: the Atari colour of a pixel value
-function gtiaColours() {
-	const g = a8.gtia, mode = g.prior & 0xC0;
+// colour: the Atari colour of a pixel value. g: GTIA's registers as the
+// scene is drawn (a8.gtia, or a copy taken then)
+function gtiaColours(g) {
+	const mode = g.prior & 0xC0;
 	const registers = [g.colpm0, g.colpm1, g.colpm2, g.colpm3, g.colpf0, g.colpf1, g.colpf2, g.colpf3, g.colbk];
 	const register = (value) => value < 8 ? value : value < 12 ? 8 : value - 8;
 	const atari = mode === 0x40 ? (value) => (g.colbk & 0xF0) | value
@@ -100,6 +101,22 @@ function triangulate(points, loops) {
 	const rightmost = (hole) => hole.reduce((best, v) => points[v][0] > points[best][0] ? v : best, hole[0]);
 	holes.sort((a, b) => points[rightmost(b)][0] - points[rightmost(a)][0]);
 	holes.forEach((hole, n) => {
+		// A hole touching the ring needs no bridge (the end level's door posts
+		// stand at the walls). Along a shared edge, the ring goes round the hole
+		// instead of along that edge; at a shared vertex, the ring goes round the
+		// hole from that vertex and comes back to it
+		const same = (v, w) => points[v][0] === points[w][0] && points[v][1] === points[w][1];
+		const m = hole.length;
+		for (let i = 0; i < ring.length; i++) {
+			const j = hole.findIndex((v) => same(v, ring[i]));
+			if (j < 0) continue;
+			if (same(hole[(j + m - 1) % m], ring[(i + 1) % ring.length])) {
+				const around = []; for (let k = 1; k < m - 1; k++) around.push(hole[(j + k) % m]);
+				ring = [...ring.slice(0, i + 1), ...around, ...ring.slice(i + 1)];
+			}
+			else ring = [...ring.slice(0, i + 1), ...hole.slice(j + 1), ...hole.slice(0, j + 1), ...ring.slice(i + 1)];
+			return;
+		}
 		const h = hole.indexOf(rightmost(hole)), H = points[hole[h]];
 		const edges = [];   // every edge the bridge must not cross: the ring's and the holes' still apart
 		for (let i = 0; i < ring.length; i++) edges.push([points[ring[i]], points[ring[(i + 1) % ring.length]]]);
@@ -170,7 +187,7 @@ function readWorld() {
 
 	// What to draw, as flat-coloured triangles and quads [colour number, x, y, z, ...]; y is up
 	const y = (height) => -HEIGHT_SCALE * height;
-	const triangles = [], quads = [], open = [];
+	const triangles = [], quads = [], open = [], walls = [];   // walls: the edges nothing is seen through, for the sprites
 	// (the unit vector out of the sector across an edge)
 	const outward = (edge, sector) => { const dx = edge.b[0] - edge.a[0], dz = edge.b[1] - edge.a[1], l = Math.hypot(dx, dz) || 1; return [dz / l * sector.outward, -dx / l * sector.outward]; };
 	// a wall: colour, how it faces the light, then its corners: the two on the floor side first
@@ -179,9 +196,10 @@ function readWorld() {
 		quads.push([edge.colour, LIGHT_AMBIENT + LIGHT_DIRECT * Math.max(0, -(nx * LIGHT[0] + nz * LIGHT[1])),
 			edge.a[0], y(from), edge.a[1], edge.b[0], y(from), edge.b[1], edge.b[0], y(to), edge.b[1], edge.a[0], y(to), edge.a[1]]);
 	};
-	// An outer edge of colour 0 has no wall: the demo fills its columns with the
-	// floor's colour up to the horizon and with the backdrop above, as if the
-	// floor went on for ever beyond it (and so the ceiling, where there is one)
+	// An outer edge of colour 0 has no wall. Under the sky, the demo fills its
+	// columns with the floor's colour up to the horizon and with the backdrop
+	// above, as if the floor went on for ever beyond it. Under a ceiling nothing
+	// is drawn there, and the picture stays black (the end level's exit)
 	const openEdge = (edge, sector) => {
 		const [nx, nz] = outward(edge, sector);
 		return { a: edge.a, b: edge.b, nx, nz, floor: y(sector.floor), floorColour: sector.floorColour, ceiling: sector.sky ? null : y(sector.ceiling), ceilingColour: sector.ceilingColour };
@@ -194,7 +212,8 @@ function readWorld() {
 		}
 		for (const edge of sector.edges) {
 			if (edge.neighbour < 0) {
-				if (edge.colour === 0) open.push(openEdge(edge, sector));
+				walls.push([edge.a, edge.b]);
+				if (edge.colour === 0 && sector.sky) open.push(openEdge(edge, sector));
 				else if (sector.floor > sector.ceiling) wall(edge, sector, sector.floor, sector.ceiling);
 				continue;
 			}
@@ -241,7 +260,7 @@ function readWorld() {
 		}
 	}
 	triangles.sort((a, b) => a[0] - b[0]); quads.sort((a, b) => a[0] - b[0]);
-	return { triangles, quads, open, objects, types, backdrop, outdoor: sectors.some((sector) => sector.sky), patterns: mem.slice(PATTERNS, PATTERNS + PATTERN_COUNT) };
+	return { triangles, quads, open, walls, objects, types, backdrop, outdoor: sectors.some((sector) => sector.sky), patterns: mem.slice(PATTERNS, PATTERNS + PATTERN_COUNT) };
 }
 
 // A sum over the level's tables and pictures, to notice another level
@@ -367,12 +386,17 @@ export function createWorld3D() {
 		// Draws the scene over its place on the screen; false when the level is
 		// not there to draw. options: smooth (the pictures scaled up), shade
 		// (shading, shadows and fog), full (the whole picture's area, not only
-		// the demo's rectangle), ground (the ground texture), antialias;
-		// camera: {x, z, eye, heading, horizon} instead of the demo's
+		// the demo's rectangle), ground (the ground texture), antialias, scene
+		// (the rectangle [x0, y0, x1, y1] the demo draws the scene in, when not
+		// the usual one), gtia (GTIA's registers as the scene is drawn, when
+		// they are not a8.gtia's at the end of the frame: the end part's text
+		// rows below the scene change them); camera: {x, z, eye, heading,
+		// horizon} instead of the demo's
 		render(options, camera) {
 			if (!track()) return false;
 			const { smooth, shade, full, ground, antialias } = options;
-			const colours = gtiaColours();
+			const scene = options.scene || SCENE, rows = Math.round((scene[3] - scene[1]) / (scene[2] - scene[0]) * COLUMNS);
+			const colours = gtiaColours(options.gtia || a8.gtia);
 			const key = colours.key + smooth;
 			if (textures === null || key !== textureKey) {
 				textureKey = key;
@@ -410,11 +434,11 @@ export function createWorld3D() {
 			const [vx, vy, vw, vh] = gl.GetIntegerv(gl.VIEWPORT);
 			// The area drawn: the demo's rectangle, or the whole picture at the same
 			// scale, which shows more around it. In the scene's columns and rows:
-			const pixel = SCENE[2] / COLUMNS - SCENE[0] / COLUMNS;   // screen pixels per column and per row
-			const c0 = full ? -SCENE[0] / pixel : 0, c1 = full ? (SCREEN_W - SCENE[0]) / pixel : COLUMNS;
-			const r0 = full ? -SCENE[1] / pixel : 0, r1 = full ? (SCREEN_H - SCENE[1]) / pixel : ROWS;
-			const px0 = full ? vx : Math.round(vx + SCENE[0] / SCREEN_W * vw), px1 = full ? vx + vw : Math.round(vx + SCENE[2] / SCREEN_W * vw);
-			const py0 = full ? vy : Math.round(vy + (1 - SCENE[3] / SCREEN_H) * vh), py1 = full ? vy + vh : Math.round(vy + (1 - SCENE[1] / SCREEN_H) * vh);
+			const pixel = (scene[2] - scene[0]) / COLUMNS;   // screen pixels per column and per row
+			const c0 = full ? -scene[0] / pixel : 0, c1 = full ? (SCREEN_W - scene[0]) / pixel : COLUMNS;
+			const r0 = full ? -scene[1] / pixel : 0, r1 = full ? (SCREEN_H - scene[1]) / pixel : rows;
+			const px0 = full ? vx : Math.round(vx + scene[0] / SCREEN_W * vw), px1 = full ? vx + vw : Math.round(vx + scene[2] / SCREEN_W * vw);
+			const py0 = full ? vy : Math.round(vy + (1 - scene[3] / SCREEN_H) * vh), py1 = full ? vy + vh : Math.round(vy + (1 - scene[1] / SCREEN_H) * vh);
 			gl.PushAttrib(gl.ALL_ATTRIB_BITS);
 			if (!antialias && gl.MULTISAMPLE !== undefined) gl.Disable(gl.MULTISAMPLE);
 			gl.Viewport(px0, py0, px1 - px0, py1 - py0);
@@ -507,11 +531,17 @@ export function createWorld3D() {
 			gl.Disable(gl.TEXTURE_2D);
 
 			// The sprites: upright cards facing the camera, the farthest first,
-			// each with a round shadow at its foot
+			// each with a round shadow at its foot. The demo paints them after
+			// the walls, over them, whenever their sector was drawn: so here,
+			// without the depth test, those with a clear line of sight to their
+			// place through the portals (the exit sign hangs over the door's
+			// block and would be cut by it otherwise)
 			gl.Enable(gl.BLEND); gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 			const depth = (o) => (o.x - cam.x) * cos + (o.z - cam.z) * sin;
 			const rightX = -sin, rightZ = cos;
-			const sprites = world.objects.filter((o) => depth(o) > NEAR).sort((a, b) => depth(b) - depth(a));
+			const eye = [cam.x, cam.z];
+			const inSight = (o) => !world.walls.some(([a, b]) => blocks(eye, [o.x, o.z], a, b));
+			const sprites = world.objects.filter((o) => depth(o) > NEAR && inSight(o)).sort((a, b) => depth(b) - depth(a));
 			const foot = (o) => -HEIGHT_SCALE * o.anchor - (o.centred ? SPRITE_HEIGHT_SCALE * o.height / 2 : 0);
 			if (shade) {
 				for (const o of sprites) {
@@ -524,6 +554,7 @@ export function createWorld3D() {
 				}
 			}
 			gl.Enable(gl.TEXTURE_2D);
+			gl.Disable(gl.DEPTH_TEST);
 			const low = shade ? FOOT_SHADE : 1;
 			for (const o of sprites) {
 				const texture = textures.types.get(o.type), type = world.types.get(o.type);

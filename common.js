@@ -69,8 +69,11 @@ export function scale2x(src, w, h) {
 // Use: const accel = createAccelerator(); call accel.onFrame() from onFrame()
 // and return accel.onCodeInjection(pc, op) from onCodeInjection(); declare
 // one unused address in codeInjections (the list is replaced at run time).
+// An extension with code injections of its own gives them as options.also,
+// a function returning their addresses, and calls accel.apply() when they
+// change; they come first in onCodeInjection.
 export function createAccelerator(options = {}) {
-	const o = { profileFrames: 150, minShare: 0.004, maxRanges: 16, budget: 2000000, reprofile: 1500, log: true, ...options };
+	const o = { profileFrames: 150, minShare: 0.004, maxRanges: 16, budget: 2000000, reprofile: 1500, log: true, also: null, ...options };
 	let frame = 0, phase = "profile", since = 0, ranges = [];
 	const dropped = [];
 	const overlaps = (r) => dropped.some((d) => r.lo <= d.hi && r.hi >= d.lo);
@@ -105,7 +108,7 @@ export function createAccelerator(options = {}) {
 	}
 
 	function apply() {
-		const addresses = [];
+		const addresses = o.also ? o.also().slice() : [];
 		for (const r of ranges) for (let a = r.lo; a <= r.hi; a++) addresses.push(a);
 		a8.setCodeInjections(addresses);
 	}
@@ -122,6 +125,8 @@ export function createAccelerator(options = {}) {
 
 		// Back to the start: nothing accelerated until a new profile has been taken
 		reset,
+		// Sets the code injections again (after options.also changed)
+		apply,
 
 		onFrame() {
 			frame++; since++;
