@@ -67,7 +67,10 @@ function gtiaColours(g) {
 		: mode === 0xC0 ? (value) => value << 4 | (g.colbk & 0x0F)
 		: (value) => registers[register(value)];
 	return {
-		key: mode + ":" + registers.join(),
+		// what the colours depend on: in modes 9 and 11 one nibble of COLBK, so that the text
+		// rows' colour changes (the end part fades them in other registers) rebuild no texture
+		key: mode === 0x40 ? "9:" + (g.colbk & 0xF0) : mode === 0xC0 ? "11:" + (g.colbk & 0x0F) : mode + ":" + registers.join(),
+		mode,
 		same: mode === 0x40 || mode === 0xC0 ? (value) => value : register,
 		rgb: Array.from({ length: 16 }, (_, value) => a8.palette[atari(value)]),
 	};
@@ -151,7 +154,10 @@ function triangulate(points, loops) {
 	return { triangles, sign };
 }
 
-// Reads the level: null unless the tables look like one
+// Reads the level's structure: null unless the tables look like one. The
+// parts that move while the level runs (the sectors' heights and vertices:
+// doors swing and slide, lifts move; the sprites: the exit sign blinks
+// between two pictures) are read every frame by update()
 function readWorld() {
 	const count = mem[SECTOR_COUNT];
 	if (count < 1 || count > 48) return null;
@@ -159,12 +165,11 @@ function readWorld() {
 	for (let s = 0; s < count; s++) {
 		const start = mem[EDGE_START + s], end = mem[EDGE_START + s + 1];
 		if (end < start + 3) return null;   // (a byte: the vertex tables hold 256)
-		const points = [], edges = [];
-		for (let k = start; k < end; k++) points.push([word(VERTEX_X_LO, VERTEX_X_HI, k), word(VERTEX_Z_LO, VERTEX_Z_HI, k)]);
+		const edges = [];
 		for (let k = start; k < end; k++) {
 			const next = mem[NEXT_VERTEX + k];
 			if (next < start || next >= end) return null;
-			edges.push({ a: points[k - start], b: points[next - start], neighbour: mem[NEIGHBOUR + k] >= NO_NEIGHBOUR ? -1 : mem[NEIGHBOUR + k], colour: mem[EDGE_COLOUR + k] });
+			edges.push({ a: k - start, b: next - start, neighbour: mem[NEIGHBOUR + k] >= NO_NEIGHBOUR ? -1 : mem[NEIGHBOUR + k], colour: mem[EDGE_COLOUR + k] });
 		}
 		// the loops of the outline, following each vertex to the next
 		const loops = [], seen = new Set();
@@ -175,34 +180,113 @@ function readWorld() {
 			if (loop.length >= 3) loops.push(loop);
 		}
 		if (loops.length === 0) return null;
-		const { triangles, sign } = triangulate(points, loops);
 		sectors.push({
-			outward: sign,
-			sky: (mem[SECTOR_FLAGS + s] & OPEN_SKY) !== 0, ceiling: mem[CEILING + s], floor: mem[FLOOR + s],
-			ceilingColour: mem[CEILING_COLOUR + s], floorColour: mem[FLOOR_COLOUR + s],
-			points, edges, triangles,
+			start, end, loops, edges,
+			sky: (mem[SECTOR_FLAGS + s] & OPEN_SKY) !== 0, ceilingColour: mem[CEILING_COLOUR + s], floorColour: mem[FLOOR_COLOUR + s],
+			// read by update(): the heights, the vertices and their triangulation
+			ceiling: 0, floor: 0, points: [], pointsSum: NaN, triangles: [], outward: 1,
 		});
 	}
 	for (const sector of sectors) for (const edge of sector.edges) if (edge.neighbour >= count) return null;
+	// The backdrop, as a picture of pixel values
+	const backdrop = new Uint8Array(BACKDROP_BYTES * 2 * BACKDROP_ROWS);
+	for (let row = 0; row < BACKDROP_ROWS; row++) {
+		const data = word(BACKDROP_ROW_LO, BACKDROP_ROW_HI, row);
+		for (let i = 0; i < BACKDROP_BYTES; i++) {
+			const byte = mem[(data + i) & 0xFFFF];
+			backdrop[row * BACKDROP_BYTES * 2 + 2 * i] = byte >> 4;
+			backdrop[row * BACKDROP_BYTES * 2 + 2 * i + 1] = byte & 15;
+		}
+	}
+	return {
+		sectors, backdrop, outdoor: sectors.some((sector) => sector.sky), patterns: mem.slice(PATTERNS, PATTERNS + PATTERN_COUNT),
+		vertices: sectors[count - 1].end,
+		types: new Map(),   // the sprites' pictures, read as objects of each type turn up
+		geometry: null, geometrySum: NaN, objects: [],
+	};
+}
 
-	// What to draw, as flat-coloured triangles and quads [colour number, x, y, z, ...]; y is up
+// A sprite type: a list of column pointers; a column is a byte per row, zero
+// for nothing, else the pixel value inverted in both nibbles. Kept as a
+// picture of 1 + pixel value (0: transparent) with an empty border, for the
+// scaler. Null when the tables do not look like one
+function readType(t) {
+	const table = word(TYPE_COLUMNS_LO, TYPE_COLUMNS_HI, t), w = mem[TYPE_WIDTH + t], h = mem[TYPE_HEIGHT + t];
+	if (w < 1 || w > 32 || h < 1 || h > 32) return null;
+	const picture = new Uint8Array((w + 2) * (h + 2));
+	for (let column = 0; column < w; column++) {
+		const data = mem[table + 2 * column] | mem[table + 2 * column + 1] << 8;
+		for (let row = 0; row < h; row++) {
+			const byte = mem[(data + row) & 0xFFFF];
+			if (byte) picture[(row + 1) * (w + 2) + column + 1] = 1 + (15 - (byte >> 4));
+		}
+	}
+	return { w: w + 2, h: h + 2, picture };
+}
+
+// The moving parts, every frame. A sum over the heights and the vertices tells
+// when the geometry has to be built again (a door swinging: a few frames in a
+// level's minutes); a sector is triangulated again only when its own points
+// moved. The objects are read whole, they are few
+function update(world) {
+	let sum = 0;
+	for (let i = CEILING; i < CEILING + 0x80; i++) sum = (sum * 31 + mem[i]) | 0;
+	for (const table of [VERTEX_X_LO, VERTEX_X_HI, VERTEX_Z_LO, VERTEX_Z_HI]) for (let i = table, e = table + world.vertices; i < e; i++) sum = (sum * 31 + mem[i]) | 0;
+	if (sum !== world.geometrySum) { world.geometrySum = sum; buildGeometry(world); }
+
+	const objects = [], objectCount = Math.min(mem[OBJECT_COUNT], 64);
+	for (let o = 0; o < objectCount; o++) {
+		const type = mem[OBJECT_TYPE + o] & 31;
+		if (!world.types.has(type)) { const read = readType(type); if (read === null) continue; world.types.set(type, read); }
+		const sector = world.sectors[mem[OBJECT_SECTOR + o]], anchor = mem[OBJECT_ANCHOR + o], height = mem[OBJECT_HEIGHT + o], centred = (mem[OBJECT_FLAGS + o] & CENTRED) !== 0;
+		objects.push({
+			x: word(OBJECT_X_LO, OBJECT_X_HI, o), z: word(OBJECT_Z_LO, OBJECT_Z_HI, o), type,
+			anchor, halfWidth: mem[OBJECT_HALF_WIDTH + o], height, centred,
+			// standing on its sector's floor (not hanging, like the exit sign): it gets a shadow there
+			standing: sector !== undefined && Math.abs(anchor + (centred ? height / 4 : 0) - sector.floor) <= 2,
+		});
+	}
+	world.objects = objects;
+}
+
+// What to draw, from the sectors as they are now: flat-coloured triangles
+// and quads [colour number, light, x, y, z, ...]; y is up
+function buildGeometry(world) {
+	const { sectors } = world;
+	sectors.forEach((sector, s) => {
+		sector.ceiling = mem[CEILING + s];
+		sector.floor = mem[FLOOR + s];
+		const points = [];
+		let pointsSum = 0;
+		for (let k = sector.start; k < sector.end; k++) {
+			const x = word(VERTEX_X_LO, VERTEX_X_HI, k), z = word(VERTEX_Z_LO, VERTEX_Z_HI, k);
+			points.push([x, z]); pointsSum = (pointsSum * 31 + x * 65536 + z) | 0;
+		}
+		sector.points = points;
+		if (pointsSum !== sector.pointsSum) {
+			sector.pointsSum = pointsSum;
+			const { triangles, sign } = triangulate(points, sector.loops);
+			sector.triangles = triangles; sector.outward = sign;
+		}
+	});
 	const y = (height) => -HEIGHT_SCALE * height;
 	const triangles = [], quads = [], open = [];
+	const at = (sector, edge) => [sector.points[edge.a], sector.points[edge.b]];
 	// (the unit vector out of the sector across an edge)
-	const outward = (edge, sector) => { const dx = edge.b[0] - edge.a[0], dz = edge.b[1] - edge.a[1], l = Math.hypot(dx, dz) || 1; return [dz / l * sector.outward, -dx / l * sector.outward]; };
+	const outward = (sector, a, b) => { const dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz) || 1; return [dz / l * sector.outward, -dx / l * sector.outward]; };
 	// a wall: colour, how it faces the light, then its corners: the two on the floor side first
-	const wall = (edge, sector, from, to) => {
-		const [nx, nz] = outward(edge, sector);
+	const wall = (sector, edge, from, to) => {
+		const [a, b] = at(sector, edge), [nx, nz] = outward(sector, a, b);
 		quads.push([edge.colour, LIGHT_AMBIENT + LIGHT_DIRECT * Math.max(0, -(nx * LIGHT[0] + nz * LIGHT[1])),
-			edge.a[0], y(from), edge.a[1], edge.b[0], y(from), edge.b[1], edge.b[0], y(to), edge.b[1], edge.a[0], y(to), edge.a[1]]);
+			a[0], y(from), a[1], b[0], y(from), b[1], b[0], y(to), b[1], a[0], y(to), a[1]]);
 	};
 	// An outer edge of colour 0 has no wall. Under the sky, the demo fills its
 	// columns with the floor's colour up to the horizon and with the backdrop
 	// above, as if the floor went on for ever beyond it. Under a ceiling nothing
 	// is drawn there, and the picture stays black (the end level's exit)
-	const openEdge = (edge, sector) => {
-		const [nx, nz] = outward(edge, sector);
-		return { a: edge.a, b: edge.b, nx, nz, floor: y(sector.floor), floorColour: sector.floorColour, ceiling: sector.sky ? null : y(sector.ceiling), ceilingColour: sector.ceilingColour };
+	const openEdge = (sector, edge) => {
+		const [a, b] = at(sector, edge), [nx, nz] = outward(sector, a, b);
+		return { a, b, nx, nz, floor: y(sector.floor), floorColour: sector.floorColour, ceiling: sector.sky ? null : y(sector.ceiling), ceilingColour: sector.ceilingColour };
 	};
 	for (const sector of sectors) {
 		// (floors wound one way, ceilings the other: a floor above the eye or a
@@ -215,77 +299,50 @@ function readWorld() {
 		}
 		for (const edge of sector.edges) {
 			if (edge.neighbour < 0) {
-				if (edge.colour === 0 && sector.sky) open.push(openEdge(edge, sector));
-				else if (sector.floor > sector.ceiling) wall(edge, sector, sector.floor, sector.ceiling);
+				if (edge.colour === 0 && sector.sky) open.push(openEdge(sector, edge));
+				else if (sector.floor > sector.ceiling) wall(sector, edge, sector.floor, sector.ceiling);
 				continue;
 			}
 			const other = sectors[edge.neighbour];
-			if (other.floor < sector.floor) wall(edge, sector, sector.floor, Math.max(other.floor, sector.ceiling));              // a step up
-			if (!(sector.sky && other.sky) && other.ceiling > sector.ceiling) wall(edge, sector, Math.min(other.ceiling, sector.floor), sector.ceiling);   // a lower ceiling beyond
-		}
-	}
-	const objects = [];
-	const objectCount = Math.min(mem[OBJECT_COUNT], 64);
-	for (let o = 0; o < objectCount; o++) {
-		const sector = sectors[mem[OBJECT_SECTOR + o]], anchor = mem[OBJECT_ANCHOR + o], height = mem[OBJECT_HEIGHT + o], centred = (mem[OBJECT_FLAGS + o] & CENTRED) !== 0;
-		objects.push({
-			x: word(OBJECT_X_LO, OBJECT_X_HI, o), z: word(OBJECT_Z_LO, OBJECT_Z_HI, o), type: mem[OBJECT_TYPE + o] & 31,
-			anchor, halfWidth: mem[OBJECT_HALF_WIDTH + o], height, centred,
-			// standing on its sector's floor (not hanging, like the exit sign): it gets a shadow there
-			standing: sector !== undefined && Math.abs(anchor + (centred ? height / 4 : 0) - sector.floor) <= 2,
-		});
-	}
-	// The sprites: per type a list of column pointers; a column is a byte per
-	// row, zero for nothing, else the pixel value inverted in both nibbles.
-	// Kept as pictures of 1 + pixel value (0: transparent) with an empty
-	// border, for the scaler
-	const types = new Map();
-	for (const object of objects) {
-		if (types.has(object.type)) continue;
-		const t = object.type, table = word(TYPE_COLUMNS_LO, TYPE_COLUMNS_HI, t), w = mem[TYPE_WIDTH + t], h = mem[TYPE_HEIGHT + t];
-		if (w < 1 || w > 32 || h < 1 || h > 32) return null;
-		const picture = new Uint8Array((w + 2) * (h + 2));
-		for (let column = 0; column < w; column++) {
-			const data = mem[table + 2 * column] | mem[table + 2 * column + 1] << 8;
-			for (let row = 0; row < h; row++) {
-				const byte = mem[(data + row) & 0xFFFF];
-				if (byte) picture[(row + 1) * (w + 2) + column + 1] = 1 + (15 - (byte >> 4));
-			}
-		}
-		types.set(t, { w: w + 2, h: h + 2, picture });
-	}
-	// The backdrop, as a picture of pixel values
-	const backdrop = new Uint8Array(BACKDROP_BYTES * 2 * BACKDROP_ROWS);
-	for (let row = 0; row < BACKDROP_ROWS; row++) {
-		const data = word(BACKDROP_ROW_LO, BACKDROP_ROW_HI, row);
-		for (let i = 0; i < BACKDROP_BYTES; i++) {
-			const byte = mem[(data + i) & 0xFFFF];
-			backdrop[row * BACKDROP_BYTES * 2 + 2 * i] = byte >> 4;
-			backdrop[row * BACKDROP_BYTES * 2 + 2 * i + 1] = byte & 15;
+			if (other.floor < sector.floor) wall(sector, edge, sector.floor, Math.max(other.floor, sector.ceiling));              // a step up
+			if (!(sector.sky && other.sky) && other.ceiling > sector.ceiling) wall(sector, edge, Math.min(other.ceiling, sector.floor), sector.ceiling);   // a lower ceiling beyond
 		}
 	}
 	triangles.sort((a, b) => a[0] - b[0]); quads.sort((a, b) => a[0] - b[0]);
-	return { triangles, quads, open, objects, types, backdrop, outdoor: sectors.some((sector) => sector.sky), patterns: mem.slice(PATTERNS, PATTERNS + PATTERN_COUNT) };
+	world.geometry = { triangles, quads, open };
 }
 
-// A sum over the level's tables and pictures, to notice another level
+// A sum over the level's structure (not its moving parts) and its pictures,
+// to notice another level
 function worldSum() {
 	let sum = 0;
-	for (let i = 0x7000; i < 0x7F00; i++) sum = (sum * 31 + mem[i]) | 0;
-	for (let i = 0xE000; i < 0xEC40; i++) sum = (sum * 31 + mem[i]) | 0;
+	for (let i = 0x7000; i < 0x7100; i++) sum = (sum * 31 + mem[i]) | 0;   // the sectors' flags and vertex ranges
+	for (let i = 0x7700; i < 0x7B00; i++) sum = (sum * 31 + mem[i]) | 0;   // the edges' links and colours
+	for (let i = 0x7D80; i < 0x7F00; i++) sum = (sum * 31 + mem[i]) | 0;   // the counts, the backdrop's and the sprites' tables
+	for (let i = 0xE000; i < 0xEC40; i++) sum = (sum * 31 + mem[i]) | 0;   // the pictures
 	return sum;
 }
 
 /* ------------------------------ the textures ------------------------------ */
 
-// A picture of pixel values (offset by one when zero means transparent) as a
-// texture; smooth: Scale2x twice and linear filtering
-function pictureTexture(picture, w, h, colours, transparent, smooth, repeat) {
+// A picture of pixel values (offset by one when zero means transparent),
+// scaled for a texture: smooth: Scale2x twice. Values that are one colour in
+// the GTIA mode are made one first, so that the scaling joins them. This
+// depends on the mode, not on the colours, and is kept while they change
+function scaledPicture(picture, w, h, colours, transparent, smooth) {
 	picture = picture.map((v) => transparent ? (v ? 1 + colours.same(v - 1) : 0) : colours.same(v));
 	if (smooth) {
 		picture = scale2x(picture, w, h); w *= 2; h *= 2;
 		picture = scale2x(picture, w, h); w *= 2; h *= 2;
 	}
+	return { picture, w, h };
+}
+
+// A scaled picture as a texture in the colours of the moment (under QuickJS
+// this is the costly part of a colour change: about 9 ms for a level's
+// pictures, against 22 ms with the scaling)
+function pictureTexture(scaled, colours, transparent, smooth, repeat) {
+	const { picture, w, h } = scaled;
 	const texture = gl.createTexture(w, h), px = texture.pixels;
 	for (let i = 0, o = 0; i < picture.length; i++, o += 4) {
 		const v = picture[i];
@@ -350,7 +407,7 @@ function groundTexture(byte, colours) {
 
 export function createWorld3D() {
 	let world = null, sum = 0, age = 0, unmapped = 0, horizon = 18;
-	let textures = null, textureKey = "";
+	let textures = null, textureKey = "", scaled = null, scaledKey = "";
 	let calls = 0, from = null, to = null, since = 0, interval = 1;
 
 	// The demo moves its camera by the time that passed, once per picture it
@@ -382,8 +439,9 @@ export function createWorld3D() {
 		horizon = mem[HORIZON];
 		if (world === null || age++ % 32 === 0) {
 			const now = worldSum();
-			if (world === null || now !== sum) { world = readWorld(); sum = now; textures = null; }
+			if (world === null || now !== sum) { world = readWorld(); sum = now; textures = null; scaled = null; }
 		}
+		if (world !== null) update(world);
 		return world !== null;
 	}
 
@@ -404,10 +462,20 @@ export function createWorld3D() {
 			const colours = gtiaColours(options.gtia || a8.gtia);
 			const key = colours.key + smooth;
 			if (textures === null || key !== textureKey) {
+				const which = colours.mode + ":" + smooth;
+				if (scaled === null || which !== scaledKey) { scaledKey = which; scaled = { backdrop: scaledPicture(world.backdrop, BACKDROP_BYTES * 2, BACKDROP_ROWS, colours, false, smooth), types: new Map() }; }
 				textureKey = key;
-				textures = { backdrop: pictureTexture(world.backdrop, BACKDROP_BYTES * 2, BACKDROP_ROWS, colours, false, smooth, true), types: new Map(), ground: new Map() };
-				for (const [t, type] of world.types) textures.types.set(t, pictureTexture(type.picture, type.w, type.h, colours, true, smooth, false));
+				textures = { backdrop: pictureTexture(scaled.backdrop, colours, false, smooth, true), types: new Map(), ground: new Map() };
 			}
+			// a sprite type's texture, made when first drawn (and again after the colours changed)
+			const typeTexture = (t) => {
+				if (!textures.types.has(t)) {
+					const type = world.types.get(t);
+					if (!scaled.types.has(t)) scaled.types.set(t, scaledPicture(type.picture, type.w, type.h, colours, true, smooth));
+					textures.types.set(t, pictureTexture(scaled.types.get(t), colours, true, smooth, false));
+				}
+				return textures.types.get(t);
+			};
 			// a colour number is a byte of two pixels: drawn here as their mix
 			const mixed = (number) => {
 				const byte = world.patterns[number < PATTERN_COUNT ? number : 0], a = colours.rgb[byte >> 4], b = colours.rgb[byte & 15];
@@ -508,9 +576,9 @@ export function createWorld3D() {
 			gl.Enable(gl.DEPTH_TEST);
 			if (ground) gl.Enable(gl.TEXTURE_2D); else gl.Disable(gl.TEXTURE_2D);
 			gl.Enable(gl.CULL_FACE); gl.CullFace(gl.BACK); gl.FrontFace(gl.CW);   // (CW: the view transform mirrors the demo's handedness)
-			each(world.triangles, gl.TRIANGLES, (t) => { flat(t[0], t[1]); floorAt(t[2], t[3], t[4]); floorAt(t[5], t[6], t[7]); floorAt(t[8], t[9], t[10]); });
+			each(world.geometry.triangles, gl.TRIANGLES, (t) => { flat(t[0], t[1]); floorAt(t[2], t[3], t[4]); floorAt(t[5], t[6], t[7]); floorAt(t[8], t[9], t[10]); });
 			gl.Disable(gl.CULL_FACE);
-			each(world.quads, gl.QUADS, (q) => {
+			each(world.geometry.quads, gl.QUADS, (q) => {
 				const along = Math.hypot(q[5] - q[2], q[7] - q[4]) / GROUND_TILE;
 				flat(q[0], q[1] * FOOT_SHADE);
 				gl.TexCoord2f(0, q[3] / GROUND_TILE); gl.Vertex3f(q[2], q[3], q[4]); gl.TexCoord2f(along, q[6] / GROUND_TILE); gl.Vertex3f(q[5], q[6], q[7]);
@@ -521,7 +589,7 @@ export function createWorld3D() {
 			// fan from the camera through its edge, the columns the demo fills.
 			// A little apart in height, the nearest edge's on top, so that they
 			// never fight each other or a real floor
-			const fans = world.open.filter((o) => (cam.x - o.a[0]) * o.nx + (cam.z - o.a[1]) * o.nz < 0)
+			const fans = world.geometry.open.filter((o) => (cam.x - o.a[0]) * o.nx + (cam.z - o.a[1]) * o.nz < 0)
 				.map((o) => ({ o, d: Math.hypot((o.a[0] + o.b[0]) / 2 - cam.x, (o.a[1] + o.b[1]) / 2 - cam.z) })).sort((p, q) => p.d - q.d);
 			fans.forEach(({ o }, rank) => {
 				const far = (point) => { const dx = point[0] - cam.x, dz = point[1] - cam.z, l = Math.hypot(dx, dz) || 1; return [point[0] + dx / l * FAR_OUT, point[1] + dz / l * FAR_OUT]; };
@@ -565,7 +633,7 @@ export function createWorld3D() {
 			gl.Enable(gl.TEXTURE_2D);
 			const low = shade ? FOOT_SHADE : 1;
 			for (const o of sprites) {
-				const texture = textures.types.get(o.type), type = world.types.get(o.type);
+				const texture = typeTexture(o.type), type = world.types.get(o.type);
 				const bottom = foot(o), top = bottom + SPRITE_HEIGHT_SCALE * o.height;
 				const d = depth(o), nearer = Math.max(NEAR, d - o.halfWidth) / d;
 				const at = (x, y, z) => gl.Vertex3f(cam.x + (x - cam.x) * nearer, eyeY + (y - eyeY) * nearer, cam.z + (z - cam.z) * nearer);
