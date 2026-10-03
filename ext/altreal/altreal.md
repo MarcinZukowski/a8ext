@@ -178,7 +178,11 @@ dimmer, the walls of the known cells from the level data at `$B000` (doors
 yellow, locked red, arches blue, secret doors as walls until `$1957`
 reveals them), special cells (flags bit 7) with a white square, the player
 as an arrow, and the marks 1-7 set with the digit keys on the player's
-cell, 0 clearing.
+cell, 0 clearing. The menu's "Show map" shows the same map without the
+key: in a browser at the bottom of the page's panel for the extension
+(`a8.panel`, a canvas drawn again only when the record, the level, the
+player or the panel's width change; on by default there), natively over
+the screen like the M key.
 
 ## Commands and the status pages
 

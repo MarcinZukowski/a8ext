@@ -5,7 +5,8 @@
 // cells from the level data at $B000, the player, and marks set with the
 // digit keys. The kinds are named from the game's own location line ("You
 // are in a corridor.") the first time a cell of that kind is entered, and
-// the text is drawn with the game's own font.
+// the text is drawn with the game's own font. In a browser the menu's "Show
+// map" keeps the same map in the page's panel beside the screen (panel()).
 //
 // The record is a file per character in the extension's maps/ directory, written
 // when it changes: the saved states of this game are 64 KB machines without
@@ -39,7 +40,7 @@ const NAME = 0x6321, NAME_LEN = 16;        // the character's name in the stats 
 const MAPS_DIR = `${a8.extDir}/maps`, RECORD_SIZE = 16384;
 const SAVE_QUIET = 120, SAVE_LATEST = 600; // frames: save after a pause in the changes, or at least this often
 
-let store = null, storeName = null, dirty = false, quiet = 0, dirtyFor = 0;
+let store = null, storeName = null, dirty = false, quiet = 0, dirtyFor = 0, version = 0;   // version: counts the changes, for the panel
 
 function characterName() {
 	let t = "";
@@ -58,7 +59,7 @@ function record() {
 	const name = characterName();
 	if (store !== null && name === storeName) return store;
 	if (store !== null && dirty) save();
-	storeName = name; store = new Uint8Array(RECORD_SIZE); dirty = false;
+	storeName = name; store = new Uint8Array(RECORD_SIZE); dirty = false; version++;
 	const f = std.open(`${MAPS_DIR}/${name}.map`, "rb");
 	if (f !== null) { f.read(store.buffer, 0, RECORD_SIZE); f.close(); }
 	if (String.fromCharCode(...store.subarray(0, MAGIC.length)) !== MAGIC) {
@@ -83,7 +84,7 @@ function save() {
 function put(i, v) {
 	const s = record();
 	if (s[i] === v) return;
-	s[i] = v; dirty = true; quiet = 0;
+	s[i] = v; dirty = true; quiet = 0; version++;
 }
 
 const cellIndex = (level, x, y) => level >= 1 && level <= MAX_LEVEL ? level * LEVEL_SIZE + y * 32 + x : -1;
@@ -295,19 +296,101 @@ function draw() {
 	gl.Color4f(1, 1, 1, 1);
 }
 
+/* ------------------------------ the map in the page's panel ------------------------------ */
+
+let panelCanvas = null, panelKey = "";
+const PANEL_FONT = "11px ui-monospace, Menlo, Consolas, monospace", LINE = 15;
+
+// In a browser: the current level's map at the bottom of the page's panel for
+// the extension (a8.panel), while on; drawn again when the record, the level,
+// the player or the panel's width change. The same map as draw()'s, with the
+// page's text
+function panel(on) {
+	if (!a8.panel) return;
+	if (!on) {
+		if (panelCanvas !== null) { panelCanvas.remove(); panelCanvas = null; panelKey = ""; }
+		return;
+	}
+	if (panelCanvas === null) {
+		panelCanvas = document.createElement("canvas");
+		panelCanvas.style.cssText = "display: block; width: 100%; margin-top: 10px; image-rendering: pixelated;";
+		a8.panel.append(panelCanvas);
+	}
+	const s = record(), level = mem[LEVEL], width = panelCanvas.clientWidth || 256;
+	const key = `${level}:${mem[CELL_X]}:${mem[CELL_Y]}:${mem[FACING] & 3}:${version}:${width}:${mem[SECRET_DOORS_SHOWN] & 0x80}`;
+	if (key === panelKey) return;
+	panelKey = key;
+
+	const known = [];
+	for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+		const i = cellIndex(level, x, y);
+		if (i >= 0 && (s[i] & (VISITED | SEEN))) { const kind = cellKind(x, y) & (KINDS - 1); if (!known.includes(kind)) known.push(kind); }
+	}
+	known.sort((a, b) => a - b);
+	const cs = Math.max(2, Math.floor(width / 32)), mapSize = 32 * cs, mx = Math.floor((width - mapSize) / 2);
+	const height = mapSize + 6 + LINE * (3 + known.length) + 4;
+	const dpr = Math.min(2, window.devicePixelRatio || 1);
+	panelCanvas.width = Math.round(width * dpr); panelCanvas.height = Math.round(height * dpr); panelCanvas.style.height = height + "px";
+	const ctx = panelCanvas.getContext("2d");
+	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+	ctx.fillStyle = "#000"; ctx.fillRect(mx, 0, mapSize, mapSize);
+	const colour = ([r, g, b]) => `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+	const w = Math.max(1, Math.floor(cs / 6));
+	ctx.font = PANEL_FONT; ctx.textBaseline = "middle";
+	for (let y = 0; y < 32; y++)
+		for (let x = 0; x < 32; x++) {
+			const i = cellIndex(level, x, y), b = i < 0 ? 0 : s[i];
+			if (!(b & (VISITED | SEEN))) continue;
+			const x0 = mx + x * cs, y0 = y * cs;
+			ctx.fillStyle = colour(kindColour(cellKind(x, y) & (KINDS - 1), b & VISITED ? 0.75 : 0.35));
+			ctx.fillRect(x0, y0, cs, cs);
+			if (cellSpecial(x, y)) { ctx.fillStyle = "#fff"; ctx.fillRect(x0 + cs * 0.4, y0 + cs * 0.4, cs * 0.2, cs * 0.2); }
+			const walls = cellWalls(x, y);
+			const sides = [[x0, y0, cs, w], [x0 + cs - w, y0, w, cs], [x0, y0 + cs - w, cs, w], [x0, y0, w, cs]];
+			for (let k = 0; k < 4; k++) {
+				const c = wallColour(walls[k]);
+				if (c !== null) { ctx.fillStyle = colour(c); ctx.fillRect(...sides[k]); }
+			}
+			const mark = b & MARK;
+			if (mark) {
+				ctx.fillStyle = colour(MARK_COLOURS[mark]); ctx.fillRect(x0 + w, y0 + w, cs - 2 * w, cs - 2 * w);
+				if (cs >= 7) { ctx.fillStyle = "#000"; ctx.font = `${cs - 2}px ui-monospace, Menlo, Consolas, monospace`; ctx.textAlign = "center"; ctx.fillText(String(mark), x0 + cs / 2, y0 + cs / 2 + 1); ctx.font = PANEL_FONT; ctx.textAlign = "left"; }
+			}
+		}
+	// the player: a triangle pointing the way it faces
+	{
+		const px = mx + mem[CELL_X] * cs + cs / 2, py = mem[CELL_Y] * cs + cs / 2, f = mem[FACING] & 3, r = cs * 0.45;
+		ctx.fillStyle = "#fff"; ctx.beginPath();
+		ctx.moveTo(px + DX[f] * r, py + DY[f] * r);
+		ctx.lineTo(px - DX[f] * r * 0.6 + DY[f] * r * 0.6, py - DY[f] * r * 0.6 - DX[f] * r * 0.6);
+		ctx.lineTo(px - DX[f] * r * 0.6 - DY[f] * r * 0.6, py - DY[f] * r * 0.6 + DX[f] * r * 0.6);
+		ctx.closePath(); ctx.fill();
+	}
+	// the legend below
+	let ly = mapSize + 6 + LINE / 2;
+	ctx.fillStyle = "#e8e4d8"; ctx.fillText(`Level ${level}`, 0, ly); ly += LINE;
+	for (const kind of known) {
+		ctx.fillStyle = colour(kindColour(kind, 0.75)); ctx.fillRect(0, ly - 5, 10, 10);
+		ctx.fillStyle = "#c8c4b8"; ctx.fillText((kindName(kind) || `kind ${kind}`).slice(0, Math.floor((width - 16) / 6.7)), 16, ly); ly += LINE;
+	}
+	ctx.fillStyle = "#8a877e"; ctx.fillText("Marks: keys 1-7 set one, 0 clears it", 0, ly); ly += LINE;
+	ctx.fillText("M: the map over the screen", 0, ly);
+}
+
 /* ------------------------------ the interface ------------------------------ */
 
 export const automap = {
 	shown: false,
 	hooks: [KEY_DISPATCH],
 
-	// The main loop fetched a command letter into A: M toggles the map, a
-	// digit marks the player's cell while it is shown; neither is a game command
+	// The main loop fetched a command letter into A: M toggles the map over
+	// the screen, a digit marks the player's cell while a map is shown;
+	// neither is a game command
 	onCodeInjection(pc, op) {
 		if (pc !== KEY_DISPATCH) return op;
 		const key = a8.cpu.a;
 		if (key === 0x6D) this.shown = !this.shown;
-		else if (this.shown && key >= 0x30 && key <= 0x37) {
+		else if ((this.shown || panelCanvas !== null) && key >= 0x30 && key <= 0x37) {
 			const i = cellIndex(mem[LEVEL], mem[CELL_X], mem[CELL_Y]);
 			if (i >= 0) put(i, (record()[i] & ~MARK) | (key - 0x30));
 		}
@@ -316,4 +399,5 @@ export const automap = {
 
 	track,
 	draw,
+	panel,
 };

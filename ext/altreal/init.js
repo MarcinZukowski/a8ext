@@ -55,10 +55,14 @@ export default {
 		// Automatic: the five disk sides are read from the .atr files next to
 		// this script, and the game never asks for a disk (disks.js)
 		DISKS: { label: "Disk swaps:", options: ["Manual", "Automatic"], current: 1 },
+		// The automatic map (automap.js): in a browser at the bottom of the page's panel,
+		// natively over the screen (as the M key shows it)
+		MAP: { label: "Show map:", options: ["OFF", "ON"], current: a8.host === "web" ? 1 : 0 },
 	},
 
 	onFrame() {
 		automap.track();   // where the player is and what lies ahead, every frame
+		automap.panel(this.menu.MAP.current === 1);
 	},
 
 	onPostGlFrame() {
@@ -77,7 +81,7 @@ export default {
 			view3d.drawWideLayout(drawn, smooth ? smooth2d : null);
 		if (smooth && !(view3d.options.wide && mem[0x7600] <= 1))
 			smooth2d.draw(PICTURE_BAND);
-		if (automap.shown)
+		if (automap.shown || (this.menu.MAP.current === 1 && !a8.panel))
 			automap.draw();
 	},
 
