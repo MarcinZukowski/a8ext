@@ -1,1 +1,9 @@
-{ "source": "https://github.com/MarcinZukowski/a8ext/tree/main/ext" }
+{
+	"source": "https://github.com/MarcinZukowski/a8ext/tree/main/ext",
+	"title": "atari800 (eru's fork)",
+	"titleLink": "https://github.com/MarcinZukowski/atari800",
+	"links": [{ "text": "a8ext", "url": "https://github.com/MarcinZukowski/a8ext" }],
+	"demos": [
+		{ "title": "Yoomp!", "url": "ext/yoomp/yoomp.atr", "hover": "Yoomp! with some simple ball and texture changes" }
+	]
+}
