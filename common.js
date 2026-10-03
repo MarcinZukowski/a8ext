@@ -55,7 +55,16 @@ export function scale2x(src, w, h) {
 // finish without time passing, so such a range is dropped for good. Ranges
 // with an executed RTI or a store to WSYNC are left alone (interrupt
 // handlers and code timed to the beam). The profile is taken again now and
-// then, since programs change what they run.
+// then, since programs change what they run. (The bytes of a range are not
+// watched: 3D engines modify their inner loops as they go.)
+//
+// Only code whose outcome does not depend on how long it takes can be run
+// this way. A main loop that paces itself by the time its work takes (no
+// wait for the frame, just work that happens to last about one) runs its
+// passes many times a frame when the work takes none, and goes wrong. The
+// caller knows which part of a program is of which kind: reset() while the
+// one that is not runs. (Numen's demo parts after its 3D scenes are like
+// that; the 3D engine moves by the time that passed and is fine.)
 //
 // Use: const accel = createAccelerator(); call accel.onFrame() from onFrame()
 // and return accel.onCodeInjection(pc, op) from onCodeInjection(); declare
@@ -103,8 +112,16 @@ export function createAccelerator(options = {}) {
 
 	const hex = (a) => "$" + a.toString(16).padStart(4, "0");
 
+	function reset(why) {
+		if (ranges.length) { ranges = []; apply(); if (o.log && why) console.log(`acceleration off: ${why}`); }
+		phase = "profile"; since = 0;
+	}
+
 	return {
 		get ranges() { return ranges; },
+
+		// Back to the start: nothing accelerated until a new profile has been taken
+		reset,
 
 		onFrame() {
 			frame++; since++;
@@ -116,10 +133,8 @@ export function createAccelerator(options = {}) {
 					phase = "run"; since = 0;
 				}
 			}
-			else if (since >= o.reprofile) {
-				ranges = []; apply();
-				phase = "profile"; since = 0;
-			}
+			else if (since >= o.reprofile)
+				reset();
 		},
 
 		onCodeInjection(pc, op) {

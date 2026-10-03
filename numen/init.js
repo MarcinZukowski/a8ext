@@ -7,7 +7,7 @@
 
 import { createAccelerator } from "../common.js";
 import { createSmoother } from "../smooth2d.js";
-import { createWorld3D } from "./world3d.js";
+import { createWorld3D, engineMapped } from "./world3d.js";
 
 const mem = a8.mem;
 const accel = createAccelerator({ minShare: 0.001, maxRanges: 48 });   // the hottest code down to 0.1% of the cycles
@@ -19,7 +19,7 @@ const smoother = createSmoother(4, 4);
 const world = createWorld3D();
 const SCENE_DLIST = 0x1F80, SCENE = [8, 24, 328, 24 + 48 * 4];
 const inScene = () => a8.antic.dlist === SCENE_DLIST && [0x1000, 0x1800].includes(mem[0x1F84] | mem[0x1F85] << 8);
-let frame = 0, flips = 0, lastLms = -1;
+let frame = 0, flips = 0, lastLms = -1, unmapped = 0;
 
 export default {
 	name: "NUMEN JS HACK by Eru",
@@ -52,7 +52,10 @@ export default {
 	},
 
 	onFrame() {
-		if (this.menu.ACCEL.current === 1) accel.onFrame();
+		// Only the 3D engine is accelerated: it moves by the time that passed. The demo's
+		// other parts pace themselves by how long their work takes, and would run wild
+		if (engineMapped()) { unmapped = 0; if (this.menu.ACCEL.current === 1) accel.onFrame(); }
+		else if (++unmapped === 25) accel.reset("the 3D engine is gone");
 		// the rendered frames: the display list's first LMS flips between the two buffers
 		frame++;
 		const lms = mem[0x1F84] | mem[0x1F85] << 8;

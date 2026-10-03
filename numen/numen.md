@@ -42,7 +42,13 @@ leaves out ranges with an executed RTI or a WSYNC store, and from then on
 runs any of them in no emulated time whenever execution enters it, with a
 budget of two million instructions after which a range is dropped for good
 (the polling loop is dropped this way at once). The profile is repeated
-every 1500 frames. *Measured*: the forest scene renders 24-33 frames a
+every 1500 frames. Only the 3D engine is accelerated: when it is not mapped
+in for 25 frames (another part of the demo, or the next level loading), the
+acceleration is reset and profiles anew once it is back. The demo's other
+parts pace themselves by how long their work takes (a depacker chunk and an
+effect step per pass of the main loop, no wait for the frame), so running
+that work in no time made them run wild and crash; the 3D engine moves by
+the time that passed and is fine. *Measured*: the forest scene renders 24-33 frames a
 second instead of 3 (11-18 with the 16 hottest ranges only), and since the
 demo advances by rendered frames, its parts go by faster too. "Log frame rate" in the menu prints the rate.
 

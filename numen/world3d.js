@@ -49,7 +49,7 @@ const GROUND_SIZE = 128, GROUND_TILE = 256, GROUND_CELLS = 4, GRAIN = 0.2, GRAIN
 const FOG_DENSITY = 0.00008, FOG_WHITE = 0.4, HAZE = [[10, 0], [3, 0.3], [0, 0.8]];   // the haze over the backdrop: [rows above the horizon, how thick]
 
 // The engine's code, to tell that its bank is mapped in at $4000 right now
-const engineMapped = () => mem[0x6611] === 0x20 && mem[0x6612] === 0xF6 && mem[0x6613] === 0x53
+export const engineMapped = () => mem[0x6611] === 0x20 && mem[0x6612] === 0xF6 && mem[0x6613] === 0x53
 	&& mem[0x57A7] === 0xAE && mem[0x57A8] === 0x2B && mem[0x57A9] === 0x55;
 
 // What a pixel value 0-15 is depends on the GTIA mode in PRIOR. Mode 10 (the
