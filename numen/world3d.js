@@ -19,7 +19,7 @@ const VERTEX_X_LO = 0x7300, VERTEX_X_HI = 0x7400, VERTEX_Z_LO = 0x7500, VERTEX_Z
 const NEXT_VERTEX = 0x7700, NEIGHBOUR = 0x7900, EDGE_COLOUR = 0x7A00, NO_NEIGHBOUR = 0x80;
 const PATTERNS = 0x4C40, PATTERN_COUNT = 52;   // colour number -> the byte (two pixels) it is drawn with
 // The sprites: per object, and per sprite type
-const OBJECT_COUNT = 0x7D82, OBJECT_FLAGS = 0x7B00, CENTRED = 0x02;
+const OBJECT_COUNT = 0x7D82, OBJECT_FLAGS = 0x7B00, CENTRED = 0x02, OBJECT_SECTOR = 0x7C80;
 const OBJECT_X_LO = 0x7B40, OBJECT_X_HI = 0x7B80, OBJECT_Z_LO = 0x7BC0, OBJECT_Z_HI = 0x7C00;
 const OBJECT_ANCHOR = 0x7C40, OBJECT_TYPE = 0x7CC0, OBJECT_HALF_WIDTH = 0x7D00, OBJECT_HEIGHT = 0x7D40;
 const TYPE_COLUMNS_LO = 0x7E80, TYPE_COLUMNS_HI = 0x7EA0, TYPE_WIDTH = 0x7EC0, TYPE_HEIGHT = 0x7EE0;
@@ -187,7 +187,7 @@ function readWorld() {
 
 	// What to draw, as flat-coloured triangles and quads [colour number, x, y, z, ...]; y is up
 	const y = (height) => -HEIGHT_SCALE * height;
-	const triangles = [], quads = [], open = [], walls = [];   // walls: the edges nothing is seen through, for the sprites
+	const triangles = [], quads = [], open = [];
 	// (the unit vector out of the sector across an edge)
 	const outward = (edge, sector) => { const dx = edge.b[0] - edge.a[0], dz = edge.b[1] - edge.a[1], l = Math.hypot(dx, dz) || 1; return [dz / l * sector.outward, -dx / l * sector.outward]; };
 	// a wall: colour, how it faces the light, then its corners: the two on the floor side first
@@ -205,14 +205,16 @@ function readWorld() {
 		return { a: edge.a, b: edge.b, nx, nz, floor: y(sector.floor), floorColour: sector.floorColour, ceiling: sector.sky ? null : y(sector.ceiling), ceilingColour: sector.ceilingColour };
 	};
 	for (const sector of sectors) {
-		for (const [ia, ib, ic] of sector.triangles) {
+		// (floors wound one way, ceilings the other: a floor above the eye or a
+		// ceiling below it faces away and is not drawn, as the demo does not)
+		for (const triangle of sector.triangles) {
+			const [ia, ib, ic] = sector.outward > 0 ? triangle : [triangle[0], triangle[2], triangle[1]];
 			const a = sector.points[ia], b = sector.points[ib], c = sector.points[ic];
 			triangles.push([sector.floorColour, 1, a[0], y(sector.floor), a[1], b[0], y(sector.floor), b[1], c[0], y(sector.floor), c[1]]);
-			if (!sector.sky) triangles.push([sector.ceilingColour, CEILING_SHADE, a[0], y(sector.ceiling), a[1], b[0], y(sector.ceiling), b[1], c[0], y(sector.ceiling), c[1]]);
+			if (!sector.sky) triangles.push([sector.ceilingColour, CEILING_SHADE, a[0], y(sector.ceiling), a[1], c[0], y(sector.ceiling), c[1], b[0], y(sector.ceiling), b[1]]);
 		}
 		for (const edge of sector.edges) {
 			if (edge.neighbour < 0) {
-				walls.push([edge.a, edge.b]);
 				if (edge.colour === 0 && sector.sky) open.push(openEdge(edge, sector));
 				else if (sector.floor > sector.ceiling) wall(edge, sector, sector.floor, sector.ceiling);
 				continue;
@@ -225,9 +227,12 @@ function readWorld() {
 	const objects = [];
 	const objectCount = Math.min(mem[OBJECT_COUNT], 64);
 	for (let o = 0; o < objectCount; o++) {
+		const sector = sectors[mem[OBJECT_SECTOR + o]], anchor = mem[OBJECT_ANCHOR + o], height = mem[OBJECT_HEIGHT + o], centred = (mem[OBJECT_FLAGS + o] & CENTRED) !== 0;
 		objects.push({
 			x: word(OBJECT_X_LO, OBJECT_X_HI, o), z: word(OBJECT_Z_LO, OBJECT_Z_HI, o), type: mem[OBJECT_TYPE + o] & 31,
-			anchor: mem[OBJECT_ANCHOR + o], halfWidth: mem[OBJECT_HALF_WIDTH + o], height: mem[OBJECT_HEIGHT + o], centred: (mem[OBJECT_FLAGS + o] & CENTRED) !== 0,
+			anchor, halfWidth: mem[OBJECT_HALF_WIDTH + o], height, centred,
+			// standing on its sector's floor (not hanging, like the exit sign): it gets a shadow there
+			standing: sector !== undefined && Math.abs(anchor + (centred ? height / 4 : 0) - sector.floor) <= 2,
 		});
 	}
 	// The sprites: per type a list of column pointers; a column is a byte per
@@ -260,7 +265,7 @@ function readWorld() {
 		}
 	}
 	triangles.sort((a, b) => a[0] - b[0]); quads.sort((a, b) => a[0] - b[0]);
-	return { triangles, quads, open, walls, objects, types, backdrop, outdoor: sectors.some((sector) => sector.sky), patterns: mem.slice(PATTERNS, PATTERNS + PATTERN_COUNT) };
+	return { triangles, quads, open, objects, types, backdrop, outdoor: sectors.some((sector) => sector.sky), patterns: mem.slice(PATTERNS, PATTERNS + PATTERN_COUNT) };
 }
 
 // A sum over the level's tables and pictures, to notice another level
@@ -502,7 +507,9 @@ export function createWorld3D() {
 
 			gl.Enable(gl.DEPTH_TEST);
 			if (ground) gl.Enable(gl.TEXTURE_2D); else gl.Disable(gl.TEXTURE_2D);
+			gl.Enable(gl.CULL_FACE); gl.CullFace(gl.BACK); gl.FrontFace(gl.CW);   // (CW: the view transform mirrors the demo's handedness)
 			each(world.triangles, gl.TRIANGLES, (t) => { flat(t[0], t[1]); floorAt(t[2], t[3], t[4]); floorAt(t[5], t[6], t[7]); floorAt(t[8], t[9], t[10]); });
+			gl.Disable(gl.CULL_FACE);
 			each(world.quads, gl.QUADS, (q) => {
 				const along = Math.hypot(q[5] - q[2], q[7] - q[4]) / GROUND_TILE;
 				flat(q[0], q[1] * FOOT_SHADE);
@@ -531,20 +538,22 @@ export function createWorld3D() {
 			gl.Disable(gl.TEXTURE_2D);
 
 			// The sprites: upright cards facing the camera, the farthest first,
-			// each with a round shadow at its foot. The demo paints them after
-			// the walls, over them, whenever their sector was drawn: so here,
-			// without the depth test, those with a clear line of sight to their
-			// place through the portals (the exit sign hangs over the door's
-			// block and would be cut by it otherwise)
+			// each with a round shadow at its foot. The demo clips them by the
+			// walls and the floor and ceiling edges in front of them, judged by
+			// the sprite's own position (Sprite_drawSprite in its engine.asx):
+			// one in the plane of a wall, like the exit sign over the door, is
+			// cut by nothing of that wall. The depth test does the clipping
+			// here, with each card brought nearer by its half width along the
+			// line of sight (and shrunk to look the same), so that the surfaces
+			// through its own place stay behind it
 			gl.Enable(gl.BLEND); gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 			const depth = (o) => (o.x - cam.x) * cos + (o.z - cam.z) * sin;
-			const rightX = -sin, rightZ = cos;
-			const eye = [cam.x, cam.z];
-			const inSight = (o) => !world.walls.some(([a, b]) => blocks(eye, [o.x, o.z], a, b));
-			const sprites = world.objects.filter((o) => depth(o) > NEAR && inSight(o)).sort((a, b) => depth(b) - depth(a));
+			const rightX = -sin, rightZ = cos, eyeY = -HEIGHT_SCALE * cam.eye;
+			const sprites = world.objects.filter((o) => depth(o) > NEAR).sort((a, b) => depth(b) - depth(a));
 			const foot = (o) => -HEIGHT_SCALE * o.anchor - (o.centred ? SPRITE_HEIGHT_SCALE * o.height / 2 : 0);
 			if (shade) {
 				for (const o of sprites) {
+					if (!o.standing) continue;
 					const r = o.halfWidth * SHADOW_SIZE, yy = foot(o) + 1.5;
 					gl.Begin(gl.TRIANGLE_FAN);
 					gl.Color4f(0, 0, 0, SHADOW_ALPHA); gl.Vertex3f(o.x, yy, o.z);
@@ -554,21 +563,22 @@ export function createWorld3D() {
 				}
 			}
 			gl.Enable(gl.TEXTURE_2D);
-			gl.Disable(gl.DEPTH_TEST);
 			const low = shade ? FOOT_SHADE : 1;
 			for (const o of sprites) {
 				const texture = textures.types.get(o.type), type = world.types.get(o.type);
 				const bottom = foot(o), top = bottom + SPRITE_HEIGHT_SCALE * o.height;
+				const d = depth(o), nearer = Math.max(NEAR, d - o.halfWidth) / d;
+				const at = (x, y, z) => gl.Vertex3f(cam.x + (x - cam.x) * nearer, eyeY + (y - eyeY) * nearer, cam.z + (z - cam.z) * nearer);
 				const lx = o.x - rightX * o.halfWidth, lz = o.z - rightZ * o.halfWidth, rx = o.x + rightX * o.halfWidth, rz = o.z + rightZ * o.halfWidth;
 				const ub = 1 / type.w, vb = 1 / type.h;   // the empty border stays outside
 				gl.BindTexture(gl.TEXTURE_2D, texture.id);
 				gl.Begin(gl.QUADS);
 				gl.Color4f(low, low, low, 1);
-				gl.TexCoord2f(ub, 1 - vb); gl.Vertex3f(lx, bottom, lz);
-				gl.TexCoord2f(1 - ub, 1 - vb); gl.Vertex3f(rx, bottom, rz);
+				gl.TexCoord2f(ub, 1 - vb); at(lx, bottom, lz);
+				gl.TexCoord2f(1 - ub, 1 - vb); at(rx, bottom, rz);
 				gl.Color4f(1, 1, 1, 1);
-				gl.TexCoord2f(1 - ub, vb); gl.Vertex3f(rx, top, rz);
-				gl.TexCoord2f(ub, vb); gl.Vertex3f(lx, top, lz);
+				gl.TexCoord2f(1 - ub, vb); at(rx, top, rz);
+				gl.TexCoord2f(ub, vb); at(lx, top, lz);
 				gl.End();
 			}
 

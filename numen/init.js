@@ -50,7 +50,9 @@ let frame = 0, flips = 0, lastLms = -1, unmapped = 0;
 export default {
 	name: "NUMEN JS HACK by Eru",
 
-	fingerprint: { address: 0xFF83, bytes: [0x48, 0x2c, 0x0f, 0xd4, 0x10, 0x03, 0x4c, 0xbb] },   // the NMI handler, in the RAM under the OS
+	// The NMI handler, in the RAM under the OS: PHA, BIT NMIST, BPL, JMP (the JMP's operand is
+	// left out: the end part repoints it between its two DLI handlers within a frame)
+	fingerprint: { address: 0xFF83, bytes: [0x48, 0x2c, 0x0f, 0xd4, 0x10, 0x03, 0x4c] },
 
 	menu: {
 		ACCEL: { label: "Acceleration:", options: ["OFF", "ON"], current: 1 },
