@@ -32,8 +32,9 @@ code alone.
   each) and takes GTIA's registers at the DLIs, keeping the last seen in a
   GTIA mode.
 * The OS ROM is off; the NMI vector points at `$FF83` (RAM under the OS),
-  the extension's fingerprint. The machine has extended memory, and the
-  demo banks it in at `$4000`-`$7FFF`.
+  the extension's fingerprint: `PHA, BIT NMIST, BPL, JMP` without the JMP's
+  operand, which the end part changes within a frame (below). The machine
+  has extended memory, and the demo banks it in at `$4000`-`$7FFF`.
 
 ## The profile
 
@@ -150,10 +151,21 @@ The end level's room (sector 0, 24 vertices) has three holes that touch
 its outline: the door's block along the left wall, sharing an edge with
 it, and two posts at the far wall, sharing a vertex each.
 
-The sprites are painted after the walls, over them, when their sector was
-drawn: the exit sign (object 10, type 2, 17 x 7, anchored at height 103,
-42 high: from 103 up to 82) hangs where the door's block (sector 36,
-ceiling 80, floor 108) would hide its lower half, and shows whole.
+The sprites are drawn after the sectors, clipped by what is in front of
+them: solid walls, and the near edges of floors and ceilings (*read* in the
+source, `Sprite_drawSprite` in duke/engine.asx: a clip list of walls with
+column outlines, each applied when the sprite's position is behind the
+wall's line). The test is by the sprite's own position, so a sprite in the
+plane of a wall is cut by nothing of that wall: the exit sign (object 10,
+type 2, 17 x 7, anchored at height 103, 42 high: from 103 up to 82) hangs
+at x = 256, in the plane of the doorway, over the door's block (sector 36,
+ceiling 80, floor 108), and shows whole. The sign is not standing on a
+floor, so it casts no shadow here.
+
+The demo's source is public: https://github.com/pfusik/numen (the engine
+in duke/engine.asx, the tables in duke/world.equ, which agree with the
+addresses below: `$7100` World_ceilingZ, `$7140` World_floorZ, `$7200`
+World_wallFlags, `$7800` World_wallReverse, `$7900` World_wallSector).
 
 ### Colours
 
@@ -231,13 +243,15 @@ bridged to the outer loop, or spliced into it where they touch it), walls
 as quads, the floor carried on beyond open outer edges under the sky as a
 fan from the camera through each edge (the columns the demo fills; under a
 ceiling such an edge is a black wall), sprites as upright cards facing the
-camera with their pictures scaled up with Scale2x, drawn after the walls
-without the depth test when a straight line from the camera to their place
-crosses no wall (the demo paints them over the walls whenever their sector
-was drawn), the backdrop as a scrolling layer behind. A dither is drawn as
-the mix of its two colours. The projection is the demo's: a frustum with
-the eye level at the horizon row, heights scaled by four. The scene's
-rectangle and GTIA's registers come from init.js (see The screen).
+camera with their pictures scaled up with Scale2x, depth-tested like
+everything else but each brought nearer by its half width along the line
+of sight (and shrunk to look the same), so that surfaces through the
+sprite's own place stay behind it as in the demo; floors are culled when
+seen from below and ceilings from above, as the demo draws neither; the
+backdrop as a scrolling layer behind. A dither is drawn as the mix of its
+two colours. The projection is the demo's: a frustum with the eye level at
+the horizon row, heights scaled by four. The scene's rectangle and GTIA's
+registers come from init.js (see The screen).
 
 The camera glides: the demo gives a new position a few times a second (some
 thirty with the acceleration), and the view moves from each to the next over
