@@ -9,8 +9,10 @@
 // addresses come from mercenary.md; the engine's structure follows the C64
 // version's analysis by gamesexplained.
 import { rgb, word } from "../common.js";
+import { createHud } from "./hud.js";
 import { drawScene, toView } from "./view3d.js";
 
+const hud = createHud();   // in a browser: the keys and the city map, as pills over the picture
 const MODE_A8 = 0, MODE_GL = 1, MODE_BOTH = 2;                       // line drawing mode
 const TYPE_LINE = 0, TYPE_POLYGON_LINE = 1, TYPE_POLYGON_FILL = 2;   // GL line type
 const FACES_OFF = 0, FACES_GLASS = 1, FACES_SHADED = 2;                // face rendering
@@ -46,6 +48,11 @@ const LINE_SETUP = 0x3E4E;
 const BUILDING_EDGES = 0x3B58;          // start of the location's edge loop
 const DRAW_OBJECT = 0x3B99;             // draw_object X
 const PLOT_SLOT = 0x538A;               // a far object: one dot at slot X's projection
+// The buffer flip: the game waits for the beam at VCOUNT $70 (below the view),
+// then writes the display list byte at $2805 ($55BC, $55CE: one buffer or the
+// other; $503D: the restart). The frame it just drew shows from the next
+// display frame on
+const FLIPS = [0x55BC, 0x55CE, 0x503D];
 const GAME_DLIST = 0x2800;              // the display list of the game's view
 const BUILDING_EDGE_FROM = 0x1E80, BUILDING_EDGE_TO = 0x1EC0;   // the location's edge tables
 const EYE = 0x70;                                        // X, height, Y: 24 bits each, low byte first
@@ -59,6 +66,10 @@ const Z_NEAR = 16;                                       // clipping plane, in w
 const mem = a8.mem;
 
 const s24 = (lo, mid, hi) => { const v = lo | (mid << 8) | (hi << 16); return v >= 0x800000 ? v - 0x1000000 : v; };
+// A difference as the game's 24-bit subtraction leaves it: it wraps, so beyond the
+// city's 16 squares the world repeats every 256 (outside the city the eye's square
+// is such as $FB, and the roads 5 squares south of it, not 251 north)
+const wrap24 = (v) => ((v + 0x800000) & 0xFFFFFF) - 0x800000;
 // The game's float: mantissa byte and an exponent byte whose bits 2-7 are a
 // signed power of two and bit 0 the sign; +-(1 + m/256) * 2^e
 const gfloat = (m, e) => { const raw = e >> 2; const se = raw >= 32 ? raw - 64 : raw; const v = (1 + m / 256) * 2 ** se; return (e & 1) ? -v : v; };
@@ -85,14 +96,17 @@ let currentGroup = null;
 let shownGroups = [], preparedGroups = [];
 const faceCache = new Map();
 
-// Lines drawn during one frame, kept in two sets: the one being shown and
-// the one being prepared. They swap when the display list byte at $2805
-// changes, which marks a new frame. With acceleration on, the game renders
-// several of its frames per display frame, so allow for plenty of lines.
+// Lines drawn during one frame, kept in three sets: the one being prepared
+// (the game is drawing it), the one completed (the game flipped to it at
+// the bottom of a display frame, so the view's rows still show the frame
+// before it in that display frame) and the one shown, which becomes the
+// completed one a display frame after each flip. Lining the sets up with
+// the flip, not with the display frame, keeps the scene one frame with the
+// picture while turning
 const MAX_LINES = 1000;
-let shownLines = [];
-let preparedLines = [];
-let shownDl = -1;
+let shownLines = [], completedLines = [], preparedLines = [];
+let completedGroups = [], completedPoints = [], completedView = null;
+let flipped = false, showNext = false;
 
 // Mercenary pixel coordinates to GL coordinates. The Atari screen is 336x240
 // in GL terms; the picture is 160 double-width pixels wide, starting 24
@@ -216,26 +230,26 @@ function eyePosition() {
 function captureBuildingVertex() {
 	const i = mem[0x17];
 	const [ex, eh, ey] = eyePosition();
-	pendingVertex = [s24(mem[VERTEX_X[0] + i], mem[VERTEX_X[1] + i], mem[VERTEX_X[2] + i]) - ex,
-	                 s24(mem[VERTEX_H[0] + i], mem[VERTEX_H[1] + i], mem[VERTEX_H[2] + i]) - eh,
-	                 s24(mem[VERTEX_Y[0] + i], mem[VERTEX_Y[1] + i], mem[VERTEX_Y[2] + i]) - ey];
+	pendingVertex = [wrap24(s24(mem[VERTEX_X[0] + i], mem[VERTEX_X[1] + i], mem[VERTEX_X[2] + i]) - ex),
+	                 wrap24(s24(mem[VERTEX_H[0] + i], mem[VERTEX_H[1] + i], mem[VERTEX_H[2] + i]) - eh),
+	                 wrap24(s24(mem[VERTEX_Y[0] + i], mem[VERTEX_Y[1] + i], mem[VERTEX_Y[2] + i]) - ey)];
 }
 
 // An object's vertex: the object's eye-relative position ($D5-$DD, lowered by
 // 2048 per axis) plus the oriented model offset (12 bits, model * 16 + 2048)
 function captureModelVertex() {
-	pendingVertex = [s24(mem[0xD5], mem[0xD6], mem[0xD7]) + (mem[0xCF] | (mem[0xD0] << 8)),
-	                 s24(mem[0xD8], mem[0xD9], mem[0xDA]) + (mem[0xD1] | (mem[0xD2] << 8)),
-	                 s24(mem[0xDB], mem[0xDC], mem[0xDD]) + (mem[0xD3] | (mem[0xD4] << 8))];
+	pendingVertex = [wrap24(s24(mem[0xD5], mem[0xD6], mem[0xD7]) + (mem[0xCF] | (mem[0xD0] << 8))),
+	                 wrap24(s24(mem[0xD8], mem[0xD9], mem[0xDA]) + (mem[0xD1] | (mem[0xD2] << 8))),
+	                 wrap24(s24(mem[0xDB], mem[0xDC], mem[0xDD]) + (mem[0xD3] | (mem[0xD4] << 8)))];
 }
 
 // The centre of city square A (row * 16 + column), ignoring the eye's low
 // byte as the game does; the height float was set by the caller
 function captureSquareCentre() {
 	const sq = a8.cpu.a, col = sq & 0x0F, row = sq >> 4;
-	pendingVertex = [((col << 16) | 0x8000) - ((mem[0x72] << 16) | (mem[0x71] << 8)),
+	pendingVertex = [wrap24(((col << 16) | 0x8000) - ((mem[0x72] << 16) | (mem[0x71] << 8))),
 	                 gfloat(mem[0x52], mem[0x53]),
-	                 ((row << 16) | 0x8000) - ((mem[0x78] << 16) | (mem[0x77] << 8))];
+	                 wrap24(((row << 16) | 0x8000) - ((mem[0x78] << 16) | (mem[0x77] << 8)))];
 }
 
 // The game's view transform, redone in floating point: in flight the view
@@ -638,19 +652,17 @@ export default {
 		FILL_ONE_COLOUR,
 		FILL_TWO_COLOURS,
 		VERTEX_REL, MODEL_VERTEX_ORIENTED, SQUARE_CENTRE_REL, PROJECT_VERTEX, LINE_SETUP,
-		BUILDING_EDGES, DRAW_OBJECT, PLOT_SLOT,
+		BUILDING_EDGES, DRAW_OBJECT, PLOT_SLOT, ...FLIPS,
 	],
 
 	onActivate() {
-		shownLines = [];
-		preparedLines = [];
-		shownGroups = [];
-		preparedGroups = [];
+		hud.install();
+		shownLines = []; completedLines = []; preparedLines = [];
+		shownGroups = []; completedGroups = []; preparedGroups = [];
+		shownPoints = []; completedPoints = []; preparedPoints = [];
+		shownView = completedView = preparedView = null;
 		currentGroup = null;
-		shownDl = -1;
-		shownView = preparedView = null;
-		shownPoints = [];
-		preparedPoints = [];
+		flipped = showNext = false;
 		pendingVertex = null;
 		slots.fill(undefined);
 	},
@@ -665,6 +677,13 @@ export default {
 		case BUILDING_EDGES: beginBuildingGroup(); return op;
 		case DRAW_OBJECT: beginObjectGroup(); return op;
 		case PLOT_SLOT: capturePoint(); return op;
+		case FLIPS[0]: case FLIPS[1]: case FLIPS[2]:
+			// the frame is complete: what the game draws from now on is the next one
+			completedLines = preparedLines; completedGroups = preparedGroups; completedPoints = preparedPoints; completedView = preparedView;
+			preparedLines = []; preparedGroups = []; preparedPoints = []; preparedView = null;
+			currentGroup = null;
+			flipped = true;
+			return op;
 		case LINE_SETUP:
 			captureEdge();
 			// In OpenGL-only mode the game need not draw the edge at all
@@ -685,26 +704,23 @@ export default {
 		return op;
 	},
 
+	onFrame() {
+		hud.update();
+	},
+
 	onPreGlFrame() {
 		if (this.menu.FPS.current === 1)
 			a8.printFps(mem[0x2805], 0x9f, 0x90, 0, -1);
 	},
 
 	onPostGlFrame() {
-		// A change of the display list byte is a new frame: swap the line sets
-		const dl = mem[0x2805];
-		if (dl !== shownDl) {
-			[shownLines, preparedLines] = [preparedLines, shownLines];
-			[shownGroups, preparedGroups] = [preparedGroups, shownGroups];
-			[shownPoints, preparedPoints] = [preparedPoints, shownPoints];
-			if (preparedView !== null) shownView = preparedView;
-			preparedView = null;
-			preparedLines.length = 0;
-			preparedGroups.length = 0;
-			preparedPoints.length = 0;
-			currentGroup = null;
-			shownDl = dl;
+		// The frame the game flipped to during the last display frame is on the screen now
+		if (showNext) {
+			shownLines = completedLines; shownGroups = completedGroups; shownPoints = completedPoints;
+			if (completedView !== null) shownView = completedView;
+			showNext = false;
 		}
+		if (flipped) { flipped = false; showNext = true; }
 
 		if (a8.accelerationDisabled())
 			return;

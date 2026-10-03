@@ -76,7 +76,12 @@ Numbers:
   divide work by adding and subtracting logs (about 0.4% error)
 * 4dd8 - fp_mul, 4e12 - fp_div, 4e59 - fp_add, 4fde - 24-bit int to float
   (A = high, X = mid, 05 = low), 4eed/4eec - sin/cos of a 10-bit angle, 4f45 - float to 8 bits
-* positions are 24-bit integers, 65536 units per city square; angles 1024 per turn
+* positions are 24-bit integers, 65536 units per city square; angles 1024 per turn.
+  The eye-relative differences are 24-bit too, and wrap: beyond the city's 16
+  squares the world repeats every 256 of them, so outside the city (the eye's
+  square such as 00-FB) the roads lie 5 squares south, not 251 north, and the
+  extension wraps its own differences the same way (`wrap24` in init.js);
+  without that the roads outside the city were a tangle
 
 View:
 * 70/71/72 - eye X (lo/mid/hi), 73/74/75 - eye height, 76/77/78 - eye Y
@@ -158,3 +163,21 @@ else can be real geometry. Options, each on its own:
 *Measured*: on the five saved states (surface on foot, in flight with roll,
 three interiors) the scene lines up with the game's own picture; drawing it
 takes 1-2 ms a frame.
+
+The lines of a frame are kept with the game's buffer flip, not with the
+display frame: the game waits for the beam at VCOUNT $70, below the view
+(`$55A5`), then writes the display list byte at `$2805` (`$55BC`, `$55CE`;
+`$503D` at a restart), so the frame it just drew shows from the next
+display frame on, and the scene shows it from then too (the extension's
+sets: prepared, completed at the flip, shown a display frame later).
+Swapping at a change of `$2805` seen at the end of a display frame showed
+the new frame's lines a display frame early, which while turning put them
+beside the game's own, now and then, as the game's frames took more or
+fewer display frames.
+
+In a browser two pills over the picture (hud.js): "?" lists the keys, the
+map pill shows the city in the corner from the game's tables, found by
+their shape (the C64 version's `$2600`-`$2FFF` moved up by `$4000`):
+`$6600`/`$6700` a square's building model pointer (98 distinct, the road
+pieces from `$F800` up), `$6B00` its status (bit 7 destroyed),
+`$6C00`-`$6FFF` the road ends per square (west, east, north, south).
