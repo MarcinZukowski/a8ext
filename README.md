@@ -54,7 +54,17 @@ Everything the emulator loads is under `ext/`, laid out as the page serves it:
 
 These games are also discussed in [this video on YouTube](https://www.youtube.com/watch?v=075qLp5kIlc).
 
-* Yoomp: [yoomp/init.js](ext/yoomp/init.js) (originally in C, now JavaScript)
+* Yoomp!: [yoomp/init.js](ext/yoomp/init.js) (originally in C, now JavaScript); the game's disk,
+  [yoomp.atr](ext/yoomp/yoomp.atr) (version 1.1), comes with it as the page's first demo, with a
+  saved game ([yoomp-gameplay.a8s](ext/yoomp/yoomp-gameplay.a8s), its ROMs the Altirra ones) as
+  its "(gameplay)" variant
+  * the tunnel drawn with OpenGL ([yoomp/tunnel.js](ext/yoomp/tunnel.js)): a cylinder textured
+    with the game's own tile pixels of the moment, read from its texture ring buffer, through
+    the projection its lookup table encodes (the geometry is in the file's header comment,
+    from the game's source); "Smooth tiles" scales the texture with Scale2x and filters it,
+    "Fog" darkens it a little toward the far end; it follows the earthquake's shaking of the
+    display list; the 3D balls turn with the game's own jump cycle, so they stand still when
+    the game does
   * various 3D balls
   * one high-res background
 * Mercenary: [mercenary/init.js](ext/mercenary/init.js), [mercenary.md](ext/mercenary/mercenary.md) (originally in C, now JavaScript)

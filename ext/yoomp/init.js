@@ -1,6 +1,8 @@
-// Yoomp!: 3D balls and a high-resolution tunnel background.
+// Yoomp!: the tunnel drawn with OpenGL from the game's own tiles (tunnel.js),
+// 3D balls and a high-resolution tunnel background.
 import { drawQuad, rgb } from "../common.js";
 import { loadObj } from "./obj.js";
+import { createTunnel } from "./tunnel.js";
 
 const DIR = a8.extDir;   // this extension's directory, for its files
 
@@ -13,8 +15,12 @@ const BALL_FILES = [
 	`${DIR}/beach-ball.obj`,
 ];
 
-// Zero page locations used by the game
-const EQU_BALL_X = 0x0030, EQU_BALL_VX = 0x0031, EQU_BALL_VY = 0x0032;
+// Zero page locations used by the game: the ball's angle round the tunnel, its
+// screen position, and its jump cycle's frame (0-31, stepped only while the
+// ball moves: not while paused, dead or waiting at a level's start)
+const EQU_BALL_X = 0x0030, EQU_BALL_VX = 0x0031, EQU_BALL_VY = 0x0032, EQU_BALL_FRAME = 0x003D, BALL_CYCLE = 32;
+
+const tunnel = createTunnel();
 
 export default {
 	name: "Yoomp! JS HACK by Eru",
@@ -22,6 +28,11 @@ export default {
 	fingerprint: { address: 0x3600, bytes: [0x20, 0x00, 0xB0, 0x20, 0xBC, 0x3D] },
 
 	menu: {
+		// The tunnel as a cylinder textured with the game's tiles (tunnel.js). It covers
+		// the game's own ball, so the original ball is drawn as the first 3D one then
+		TUNNEL: { label: "OpenGL tunnel:", options: ["OFF", "ON"], current: 1 },
+		SMOOTH: { label: "Smooth tiles:", options: ["OFF", "ON"], current: 0 },
+		FOG: { label: "Fog:", options: ["OFF", "ON"], current: 1 },
 		BKG: { label: "Nicer background:", options: ["OFF", "ON"], current: 1 },
 		BALL: {
 			label: "Ball type:",
@@ -33,7 +44,6 @@ export default {
 	initialized: false,
 	balls: [],          // indexed like BALL_FILES
 	background: null,
-	ballCounter: 0,     // drives the ball animation
 
 	init() {
 		if (this.initialized)
@@ -92,7 +102,9 @@ export default {
 	},
 
 	drawBall() {
-		const ballNr = this.menu.BALL.current;
+		let ballNr = this.menu.BALL.current;
+		if (ballNr === 0 && this.menu.TUNNEL.current === 1)
+			ballNr = 1;   // the OpenGL tunnel covers the game's ball: a 3D one stands in
 		if (ballNr === 0)
 			return;   // original Atari ball, draw nothing
 
@@ -102,8 +114,6 @@ export default {
 		gl.PushMatrix();
 		gl.LoadIdentity();
 
-		this.ballCounter++;
-
 		const ballAngle = a8.mem[EQU_BALL_X];
 		const ballVx = a8.mem[EQU_BALL_VX];
 		const ballVy = a8.mem[EQU_BALL_VY];
@@ -111,7 +121,7 @@ export default {
 		gl.Translatef((ballVx - 128 + 4) / 84, -(ballVy - 112 - 8) / 120, 0);
 		gl.Scalef(0.05, 0.07, 0.07);
 		gl.Rotatef(ballAngle / 256 * 360, 0, 0, 1);
-		gl.Rotatef(11 * this.ballCounter, 1, 0, 0);
+		gl.Rotatef(a8.mem[EQU_BALL_FRAME] / BALL_CYCLE * 360, 1, 0, 0);   // one turn a jump cycle, still when the game is
 
 		let cr = 1, cg = 1, cb = 1;
 		if (ballNr === 1) {
@@ -125,12 +135,17 @@ export default {
 		gl.Color4f(1, 1, 1, 1);
 	},
 
+	codeInjections: tunnel.hooks,
+	onCodeInjection(pc, op) { return tunnel.onCodeInjection(pc, op); },
+
 	onPostGlFrame() {
 		this.init();
 		// Only during the game
 		if (a8.antic.dlist !== 0xCA00)
 			return;
 		this.drawBackground();
+		if (this.menu.TUNNEL.current === 1)
+			tunnel.render({ smooth: this.menu.SMOOTH.current === 1, fog: this.menu.FOG.current === 1 });
 		this.drawBall();
 	},
 };
