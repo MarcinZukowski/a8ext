@@ -53,6 +53,14 @@ const PLOT_SLOT = 0x538A;               // a far object: one dot at slot X's pro
 // other; $503D: the restart). The frame it just drew shows from the next
 // display frame on
 const FLIPS = [0x55BC, 0x55CE, 0x503D];
+// The game's pace. Everything moves a fixed amount a pass of the main loop,
+// and a pass takes as long as the drawing does: six to ten display frames
+// in the original, two or three with the drawing done here. Before the flip
+// the game waits for the beam at $55A5 (LDA VCOUNT; CMP #$70; BNE $55A5);
+// a pass not yet due is sent back into that wait from $55AC, just past it,
+// until enough display frames have gone by
+const BEAM_WAIT = 0x55A5, PACE_CHECK = 0x55AC, FRAMES_A_SECOND = 50;
+const PASSES_A_SECOND = [8, 12, 20, 0];   // by the FPS option; 0: as fast as it goes
 const GAME_DLIST = 0x2800;              // the display list of the game's view
 const BUILDING_EDGE_FROM = 0x1E80, BUILDING_EDGE_TO = 0x1EC0;   // the location's edge tables
 const EYE = 0x70;                                        // X, height, Y: 24 bits each, low byte first
@@ -107,6 +115,7 @@ const MAX_LINES = 1000;
 let shownLines = [], completedLines = [], preparedLines = [];
 let completedGroups = [], completedPoints = [], completedView = null;
 let flipped = false, showNext = false;
+let frames = 0, nextPass = 0;   // display frames seen, and the frame the next pass is due at
 
 // Mercenary pixel coordinates to GL coordinates. The Atari screen is 336x240
 // in GL terms; the picture is 160 double-width pixels wide, starting 24
@@ -634,6 +643,7 @@ export default {
 
 	menu: {
 		FPS: { label: "Display FPS:", options: ["OFF", "ON"], current: 1 },
+		SPEED: { label: "FPS:", options: ["8", "12", "20", "MAX"], current: 1 },
 		ACCEL: { label: "Accelerate:", options: ["OFF", "ON"], current: 1 },
 		LINES: { label: "Line drawing mode:", options: ["Atari native", "OpenGL", "Both"], current: MODE_GL },
 		GLTYPE: { label: "GL line type:", options: ["Line", "Polygon-Line", "Polygon-Fill"], current: TYPE_LINE },
@@ -652,7 +662,7 @@ export default {
 		FILL_ONE_COLOUR,
 		FILL_TWO_COLOURS,
 		VERTEX_REL, MODEL_VERTEX_ORIENTED, SQUARE_CENTRE_REL, PROJECT_VERTEX, LINE_SETUP,
-		BUILDING_EDGES, DRAW_OBJECT, PLOT_SLOT, ...FLIPS,
+		BUILDING_EDGES, DRAW_OBJECT, PLOT_SLOT, ...FLIPS, PACE_CHECK,
 	],
 
 	onActivate() {
@@ -663,6 +673,7 @@ export default {
 		shownView = completedView = preparedView = null;
 		currentGroup = null;
 		flipped = showNext = false;
+		frames = nextPass = 0;
 		pendingVertex = null;
 		slots.fill(undefined);
 	},
@@ -684,6 +695,14 @@ export default {
 			currentGroup = null;
 			flipped = true;
 			return op;
+		case PACE_CHECK: {
+			const rate = PASSES_A_SECOND[this.menu.SPEED.current];
+			if (!rate || a8.accelerationDisabled()) return op;
+			if (frames < nextPass) { a8.cpu.pc = BEAM_WAIT; return a8.OP_NOP; }   // not yet: wait for the next beam
+			const interval = FRAMES_A_SECOND / rate;
+			nextPass = (frames - nextPass < interval ? nextPass : frames) + interval;   // (a long gap does not pile up passes)
+			return op;
+		}
 		case LINE_SETUP:
 			captureEdge();
 			// In OpenGL-only mode the game need not draw the edge at all
@@ -705,6 +724,7 @@ export default {
 	},
 
 	onFrame() {
+		frames++;
 		hud.update();
 	},
 

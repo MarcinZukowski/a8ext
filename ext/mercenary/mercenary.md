@@ -175,6 +175,21 @@ the new frame's lines a display frame early, which while turning put them
 beside the game's own, now and then, as the game's frames took more or
 fewer display frames.
 
+The game's speed is its drawing speed. Everything moves a fixed amount a
+pass of the main loop (a walk 80 units, a turn 16/1024 of a circle, the
+flight physics one step), and a pass takes as long as the drawing of the
+frame does: six to ten display frames in the original, two with the lines
+drawn here, so the game ran three to four times faster. Only the seconds
+clock is real time (`$E2` counts VBIs to 50 into `$E3`/`$E4`). The "FPS"
+option paces the passes: at `$55AC`, just past the beam wait, a
+pass not yet due is sent back into the wait, which goes on until the next
+VCOUNT $70, until 6.25, 4.2 or 2.5 display frames have gone by since the
+last pass (8, 12 and 20 passes a second, 12 the default; MAX does nothing).
+A pass that took longer than that is not made up for. Measured: 8.2,
+12.2, 20.0 and 25 passes a second on m1.a8s, in the browser and natively.
+The original's pace varied with the scene; 8 a second is a round figure
+for it, not an imitation.
+
 In a browser two pills over the picture (hud.js): "?" lists the keys, the
 map pill shows the city in the corner from the game's tables, found by
 their shape (the C64 version's `$2600`-`$2FFF` moved up by `$4000`):

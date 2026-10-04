@@ -78,6 +78,10 @@ These games are also discussed in [this video on YouTube](https://www.youtube.co
     sky and a ground plane with an exact horizon instead of the game's row-by-row fill, lines as
     ribbons that thin out with distance, ground marks cut at the horizon as the game's pen trick
     cuts them, rooms drawn solid, a light grain over ground and faces, fog and lighting
+  * an FPS option: the game moves a fixed amount a pass of its main loop (one frame each), and
+    with the drawing done here a pass takes two display frames instead of the original's six to
+    ten, so the passes are held to 8 a second (the original's pace), 12 (the default), 20, or
+    not at all
 * Zybex: [zybex/init.js](ext/zybex/init.js), [zybex.md](ext/zybex/zybex.md) (originally in C, now JavaScript)
   * scrolling background (grayscale and color modes)
 * Behind Jaggi Lines: [bjl/init.js](ext/bjl/init.js) (originally in C, now JavaScript)
