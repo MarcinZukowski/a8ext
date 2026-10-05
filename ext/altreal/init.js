@@ -6,6 +6,7 @@ import { createView3D, SPRITE_HOOK, PICTURE_BAND, pictureRowsDisplayed } from ".
 import * as smooth2d from "./smooth2d.js";
 import { disks } from "./disks.js";
 import { automap } from "./automap.js";
+import { codeAt } from "../common.js";
 //
 // Movement: the position inside the current cell is $6316/$6317 on a 36-unit
 // grid, and each step adds the step size $6383, which the game derives from
@@ -28,6 +29,22 @@ const MAX_MOVES_PER_SECOND = 28;         // the accelerated loop manages about 3
 const SPEED_FACTORS = [1, 1.5, 2, 3];    // the "Walking speed" options
 
 const mem = a8.mem;
+
+// The busy loops skipped under acceleration: the hooked address, the address the
+// fake CPU runs to, and the engine's own bytes at the hook. A store, a tavern or
+// an encounter loads its code over the engine ($7800-$7FFF and the zero-page
+// filler among it), and a hook met in that code must leave it alone: the store's
+// handler of the "0" key runs through $7858 and jumps to the loader, which never
+// reaches $7887, so the fake CPU would run for ever
+const BUSY_LOOPS = {
+	0x0090: { until: 0x00D5, bytes: [0xA6, 0x64, 0xBD] },   // the column filler
+	0x7858: { until: 0x7887, bytes: [0x8E, 0x77, 0x8F] },   // the picture into the fonts
+	0x4A69: { until: 0x4A82, bytes: [0xBD, 0x4B, 0x64] },   // the loop over the monsters
+	0x3884: { until: 0x38CE, bytes: [0xBD, 0x94, 0x64] },   // monsters at the player's cell
+	0x7A1F: { until: 0x7A36, bytes: [0xA9, 0x00, 0x85] },   // the multiply
+	0x7F1B: { until: 0x7F4A, bytes: [0xA6, 0x8F, 0xBD] },
+};
+const PICTURE_TO_FONTS = 0x7856, PICTURE_TO_FONTS_BYTES = [0xA2, 0x47, 0x8E];
 let gameStep = 7;         // the step size the game computed for the character
 const view3d = createView3D();
 let movesPerSecond = GAME_STEPS_PER_SECOND;
@@ -98,7 +115,7 @@ export default {
 	calls7856: 0,
 
 	// We intercept execution at these addresses
-	codeInjections: [0x7856, 0x0090, 0x4A69, 0x3884, 0x7858, 0x7A1F, 0x7F1B, STEP_SIZE_SET, JOYSTICK_PACKED, SPRITE_HOOK, ...disks.hooks, ...automap.hooks],
+	codeInjections: [PICTURE_TO_FONTS, ...Object.keys(BUSY_LOOPS).map(Number), STEP_SIZE_SET, JOYSTICK_PACKED, SPRITE_HOOK, ...disks.hooks, ...automap.hooks],
 
 	onCodeInjection(pc, op) {
 		if (disks.hooks.includes(pc))
@@ -109,7 +126,7 @@ export default {
 			view3d.captureSprites();
 			return op;
 		}
-		if (pc === 0x7856) {   // the picture goes into the fonts: once per drawn frame
+		if (pc === PICTURE_TO_FONTS && codeAt(pc, PICTURE_TO_FONTS_BYTES)) {   // the picture goes into the fonts: once per drawn frame
 			this.calls7856++;
 			view3d.snapshotArt();   // the wall art is valid now (encounters load code over it)
 		}
@@ -149,15 +166,10 @@ export default {
 		if (a8.accelerationDisabled() || this.menu.ACCEL.current === 0)
 			return op;
 
-		// The busy loops run in no emulated time (the hot spots in altreal.md)
-		switch (pc) {
-		case 0x0090: return a8.fakeCpuUntilPc(0x00D5);   // the column filler
-		case 0x7858: return a8.fakeCpuUntilPc(0x7887);   // the picture into the fonts
-		case 0x4A69: return a8.fakeCpuUntilPc(0x4A82);   // the loop over the monsters
-		case 0x3884: return a8.fakeCpuUntilPc(0x38CE);   // monsters at the player's cell
-		case 0x7A1F: return a8.fakeCpuUntilPc(0x7A36);   // the multiply
-		case 0x7F1B: return a8.fakeCpuUntilPc(0x7F4A);
-		}
+		// The busy loops run in no emulated time (the hot spots in altreal.md), when it is the engine's code there
+		const loop = BUSY_LOOPS[pc];
+		if (loop !== undefined && codeAt(pc, loop.bytes))
+			return a8.fakeCpuUntilPc(loop.until);
 		return op;
 	},
 

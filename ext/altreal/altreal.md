@@ -126,6 +126,15 @@ Found while looking into why walking is drawn in a few big steps.
 "Acceleration" in init.js runs the hot spots below in no emulated time (the
 column filler, the picture's copy into the fonts, the monster loops, the
 multiply): the main loop then makes about 30 passes a second instead of 2-3.
+Each is run only when the engine's own bytes are at the hooked address: a
+store, a tavern or an encounter loads its code over `$7800`-`$7FFF` and over
+the zero-page filler (the monster loops at `$3884` and `$4A69` stay), and
+the store's handler of the "0" key, leaving it, runs through `$7858`
+(`STA $6313,X; DEX; BPL`, then `JMP $180C` to the loader). Run from there
+to `$7887` the fake CPU never arrived, and the game hung on leaving a
+store (*live*, ar-err.a8s, the "0" key); with the check it loads the maze
+again (*measured* in the browser with the sides served: `$7856` holds
+`A2 47` again, `$1938` is 0, the corridor is drawn).
 "Smooth walking" uses this: with the drawing accelerated, the
 joystick is let through so that the character covers 17.5 * (game step / 7)
 units a second, the speed the game intended, times the "Walking speed" factor

@@ -21,6 +21,16 @@ export function word(addr) {
 	return a8.mem[addr] | (a8.mem[addr + 1] << 8);
 }
 
+// Whether the bytes at addr are these: a check that the code a hook was placed
+// in is still there, for games that load other code over it (a store or an
+// encounter in Alternate Reality). The fake CPU must not run anything else:
+// run to an address the new code never reaches, it runs for ever.
+export function codeAt(addr, bytes) {
+	for (let i = 0; i < bytes.length; i++)
+		if (a8.mem[addr + i] !== bytes[i]) return false;
+	return true;
+}
+
 // Atari colour byte -> [r, g, b] in 0..1, for gl.Color4f().
 export function rgb(colour) {
 	const v = a8.palette[colour & 0xff];
