@@ -419,7 +419,11 @@ state, not in the maze one):
   pictures), so during an encounter the wall art in memory is code and data
   of the encounter. The game does not redraw the maze then (the fonts keep
   the picture), which is why it can; view3d.js copies the art whenever
-  `$7856` runs and draws from the copy.
+  `$7856` runs and draws from the copy, and once on activation when the
+  maze is shown with the engine resident and no encounter on (`$7600` = 0,
+  `$1938` not `$FF`), so the view does not wait for the player's first
+  step (until then the wide layout showed the game's own picture smoothed,
+  without the fog: *live*, the TAB menu in the native build).
 * `$1938` is `$FF` during an encounter (set at `$2F90` and `$3627`), and
   `$7600` is 1, which stops the interrupt at `$1B56` from turning players 0
   and 1 into the frame's bars. `$7600` is the screen's state: 0 in the maze

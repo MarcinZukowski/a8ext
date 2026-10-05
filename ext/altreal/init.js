@@ -113,6 +113,11 @@ export default {
 	onActivate() {
 		gameStep = mem[STEP_SIZE];
 		disks.panel();   // in a browser: where the player supplies the disk images
+		// The wall art is copied at each redraw; activated in the maze, with
+		// the engine resident and no encounter's code over the art, the view
+		// need not wait for the player's first step to copy it
+		if (mem[0x7600] === 0 && mem[0x1938] !== 0xFF && codeAt(PICTURE_TO_FONTS, PICTURE_TO_FONTS_BYTES))
+			view3d.snapshotArt();
 	},
 
 	// Counts calls to $7856 (once per drawn frame), used for the FPS display
