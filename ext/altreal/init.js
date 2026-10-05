@@ -6,6 +6,7 @@ import { createView3D, SPRITE_HOOK, PICTURE_BAND, pictureRowsDisplayed } from ".
 import * as smooth2d from "./smooth2d.js";
 import { disks } from "./disks.js";
 import { automap } from "./automap.js";
+import { loader } from "./loader.js";
 import { codeAt } from "../common.js";
 //
 // Movement: the position inside the current cell is $6316/$6317 on a 36-unit
@@ -73,6 +74,7 @@ export default {
 		// Automatic: the five disk sides are read from the .atr files next to
 		// this script, and the game never asks for a disk (disks.js)
 		DISKS: { label: "Disk swaps:", options: ["Manual", "Automatic"], current: 1 },
+		LOADING: { label: "Loading:", options: ["Original", "Instant"], current: 1 },   // the loader's work on the fake CPU
 		// The automatic map (automap.js): in a browser at the bottom of the page's panel,
 		// natively over the screen (as the M key shows it)
 		MAP: { label: "Show map:", options: ["OFF", "ON"], current: a8.host === "web" ? 1 : 0 },
@@ -117,13 +119,15 @@ export default {
 	calls7856: 0,
 
 	// We intercept execution at these addresses
-	codeInjections: [PICTURE_TO_FONTS, ...Object.keys(BUSY_LOOPS).map(Number), STEP_SIZE_SET, JOYSTICK_PACKED, SPRITE_HOOK, ...disks.hooks, ...automap.hooks],
+	codeInjections: [PICTURE_TO_FONTS, ...Object.keys(BUSY_LOOPS).map(Number), STEP_SIZE_SET, JOYSTICK_PACKED, SPRITE_HOOK, ...disks.hooks, ...automap.hooks, ...loader.hooks],
 
 	onCodeInjection(pc, op) {
 		if (disks.hooks.includes(pc))
 			return this.menu.DISKS.current === 1 ? disks.onCodeInjection(pc, op) : op;
 		if (automap.hooks.includes(pc))
 			return automap.onCodeInjection(pc, op);
+		if (loader.hooks.includes(pc))
+			return this.menu.LOADING.current === 1 && !a8.accelerationDisabled() ? loader.onCodeInjection(pc, op) : op;
 		if (pc === SPRITE_HOOK) {   // the picture's first interrupt: the monster sprite's registers are valid
 			view3d.captureSprites();
 			return op;

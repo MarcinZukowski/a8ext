@@ -115,6 +115,9 @@ These games are also discussed in [this video on YouTube](https://www.youtube.co
     record is a file per character in `ext/altreal/maps/`, so it survives states and restarts;
     in a browser "Show map" keeps the map at the bottom of the page's panel beside the screen,
     with a button that clears it
+  * instant loading ([altreal/loader.js](ext/altreal/loader.js)): the loader's copying, descrambling
+    and checksumming of an area, 10-20 frames of 6502 work once the sectors come from files, run on
+    the fake CPU in no time, so a shop or an encounter is there the next frame
   * no disk swapping: boot from side 1 as usual, then the game's sector reads are served from the
     five disk images placed in `ext/altreal/` ([altreal/disks.js](ext/altreal/disks.js)), so "Please
     insert Disk..." never comes up (the game only ever reads)

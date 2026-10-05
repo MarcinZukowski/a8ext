@@ -489,6 +489,30 @@ its element): the player chooses their own five `.atr` files once, they are
 written under the names above through the same `std` file calls, and the page
 keeps what is written in the browser's local storage.
 
+With the sectors served, a load still takes 10-20 frames of the 6502's own
+work (*measured*: leaving the Damon & Pythias shop, 609,000 cycles, the
+maze back after 19 frames; entering it, the loader's samples cover some 25
+frames): the loader at `$2799` (`JSR $2937` reads the header sector and
+checks four bytes of it against the area record; then `$279E`-`$27CA`:
+`JSR $2979` for each sector, copied from `$0100` to `($09)`, the length
+`$0B`/`$0C` counted down; `$27DE` keeps the sixteen key bytes at `$0180`,
+`$280D`-`$2843` descrambles, `$2845`-`$2885` sums), 46 % of the cycles in
+the copy loop, a block copy at `$2E0D` (13 %), the maze screen's set-up at
+`$1A65`-`$1B18` (12 %: display list pointers, DMACTL, the players, the
+colours zeroed, the border inverted, `$0800`-`$13FF` filled with `$FF`),
+and about one frame in all in the waits for a frame at `$2454` (`LDA $0252;
+CMP $0252; BEQ`, called from `$1A1E` and `$246F`). The "Loading" option
+(loader.js) runs the loader on the fake CPU: a run from `$2799`, and one
+after each read from `$298D`, for as long as the PC stays in
+`$2799`-`$29FF`; the run leaves it at `$248E`, where the normal CPU meets
+disks.js's hook (hooks are not seen inside a fake run) and comes back to
+`$298D`. `$2E0D` runs to its RTS and `$1AD4`-`$1B18` as a range; the frame
+waits stay. *Measured*: the maze back 1 frame after the key (4 with the 3
+frames the key is held), the shop's own screen drawn after about 10 frames
+as before. Neither of these two transitions prints "Loading..." (the string
+at `$2A24`, "Loading...Encounter!", is in no screen memory meanwhile): that
+message belongs to the encounters, which load through the same `$2799`.
+
 ## Hot spots
 
 Instruction frequencies over a walk, from the monitor's profile, which is
