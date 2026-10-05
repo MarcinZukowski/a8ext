@@ -33,7 +33,9 @@ scripts. `make` here builds that page with these extensions into `dist/`
 
 Everything in `site/` is copied into `dist/` as well: put a `demos.json`
 there, and the programs it lists, to have them offered on the page (the
-format is in the fork's `web/README.md`). Mind the rights before publishing
+format is in the fork's `web/README.md`). The page also carries the fork's
+own self-test extension, listed under Demos: it checks the emulator built
+into the page and reports in the log. Mind the rights before publishing
 programs: a saved state contains the game and the operating system ROM it
 was saved with.
 
