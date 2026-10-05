@@ -5,8 +5,9 @@
 // cells from the level data at $B000, the player, and marks set with the
 // digit keys. The kinds are named from the game's own location line ("You
 // are in a corridor.") the first time a cell of that kind is entered, and
-// the text is drawn with the game's own font. In a browser the menu's "Show
-// map" keeps the same map in the page's panel beside the screen (panel()).
+// the text is drawn with the game's own font. X twice clears the whole map.
+// In a browser the menu's "Show map" keeps the same map in the page's panel
+// beside the screen (panel()), with a button that clears it.
 //
 // The record is a file per character in the extension's maps/ directory, written
 // when it changes: the saved states of this game are 64 KB machines without
@@ -80,6 +81,18 @@ function save() {
 	dirty = false; quiet = 0; dirtyFor = 0;
 }
 
+// Forgets the whole map of the character: every level, the marks and the
+// kinds' names (the file is written at once)
+function clear() {
+	const s = record();
+	s.fill(0);
+	for (let i = 0; i < MAGIC.length; i++) s[i] = MAGIC.charCodeAt(i);
+	dirty = true; version++;
+	save();
+	lastCell = -1;   // the current cell is visited again on the next frame
+	console.log(`altreal: map of ${storeName} cleared`);
+}
+
 // Writes a byte of the record, noting the change
 function put(i, v) {
 	const s = record();
@@ -116,10 +129,13 @@ const seeThrough = (n) => n === 0 || n === 1 || n === 2;   // open, or an arch
 /* ------------------------------ tracking ------------------------------ */
 
 let lastCell = -1, nameCountdown = 0, nameKind = -1;
+let clearArmed = 0;   // frames left in which a second X clears the map (the overlay says so)
+const CLEAR_ARMED_FRAMES = 180;
 
 // Call every frame: marks the player's cell visited, the corridor ahead
 // seen, and reads the location line for a kind not yet named
 function track() {
+	if (clearArmed > 0) clearArmed--;
 	if (mem[SCREEN_STATE] > 1) return;
 	const s = record(), level = mem[LEVEL], x = mem[CELL_X], y = mem[CELL_Y], f = mem[FACING] & 3;
 	const i = cellIndex(level, x, y);
@@ -222,14 +238,19 @@ function draw() {
 	gl.Disable(gl.DEPTH_TEST); gl.Disable(gl.FOG); gl.Disable(gl.TEXTURE_2D);
 	gl.Enable(gl.BLEND); gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-	// the shade over the screen
-	gl.Color4f(0, 0, 0, 0.8);
-	gl.Begin(gl.QUADS); rect(0, 0, vw, vh); gl.End();
-
 	// the grid: square cells, the map at the left, text to its right
 	const ts = Math.max(1, Math.floor(vh / 240)), margin = 8 * ts;
 	const cs = Math.floor(Math.min(vh - 2 * margin, vw * 0.62) / 32);
 	const mx = margin, my = Math.floor((vh - 32 * cs) / 2), w = Math.max(1, Math.floor(cs / 6));
+	// The map lies over the picture as it is: nothing is shaded. Only the
+	// known cells are drawn, and each line of text gets a dark strip behind it
+	const lx = mx + 32 * cs + 2 * margin;
+	const label = (str, x, y, scale, r, g, b) => {
+		gl.Disable(gl.TEXTURE_2D); gl.Enable(gl.BLEND);
+		gl.Color4f(0, 0, 0, 0.7);
+		gl.Begin(gl.QUADS); rect(x - 2 * scale, y - scale, x + 8 * scale * str.length + 2 * scale, y + 9 * scale); gl.End();
+		text(str, x, y, scale, r, g, b);
+	};
 	const known = [];
 	for (let y = 0; y < 32; y++)
 		for (let x = 0; x < 32; x++) {
@@ -274,21 +295,25 @@ function draw() {
 		gl.End();
 	}
 	// the legend, in the room right of the map: a text size that fits 26 characters
-	const lx = mx + 32 * cs + 2 * margin, lw = vw - lx - margin;
-	const ls = Math.max(1, Math.floor(lw / (8 * 26))), lh = 10 * ls, chars = Math.floor(lw / (8 * ls)) - 2;
+	const lw = vw - lx - margin;
+	const ls = Math.max(1, Math.floor(lw / (8 * 26))), lh = 10 * ls;
+	const fit = (str, x) => str.slice(0, Math.max(0, Math.floor((vw - margin - x) / (8 * ls))));   // what fits before the right margin
 	let ly = my;
-	text(`Level ${level}`, lx, ly, ls, 1, 1, 1); ly += lh * 1.5;
+	label(`Level ${level}`, lx, ly, ls, 1, 1, 1); ly += lh * 1.5;
 	known.sort((a, b) => a - b);
-	for (const kind of known.slice(0, Math.max(0, Math.floor((vh - my - ly - 3 * lh) / lh)))) {
+	for (const kind of known.slice(0, Math.max(0, Math.floor((vh - my - ly - 4 * lh) / lh)))) {
 		const [r, g, b] = kindColour(kind, 0.75);
+		label(fit(kindName(kind) || `kind ${kind}`, lx + 12 * ls), lx + 12 * ls, ly, ls, 0.9, 0.9, 0.9);
+		gl.Disable(gl.TEXTURE_2D);
 		gl.Color4f(r, g, b, 1);
 		gl.Begin(gl.QUADS); rect(lx, ly, lx + 8 * ls, ly + 8 * ls); gl.End();
-		text((kindName(kind) || `kind ${kind}`).slice(0, chars), lx + 12 * ls, ly, ls, 0.9, 0.9, 0.9);
 		ly += lh;
 	}
-	ly = vh - my - 2 * lh;
-	text("Marks: 1-7 set, 0 clear".slice(0, chars + 2), lx, ly, ls, 0.7, 0.7, 0.7);
-	text("M closes the map", lx, ly + lh, ls, 0.7, 0.7, 0.7);
+	ly = vh - my - 3 * lh;
+	label(fit("Marks: 1-7 set, 0 clear", lx), lx, ly, ls, 0.7, 0.7, 0.7);
+	if (clearArmed > 0) label(fit("X again: clear whole map", lx), lx, ly + lh, ls, 1, 0.5, 0.4);
+	else label(fit("X clears the whole map", lx), lx, ly + lh, ls, 0.7, 0.7, 0.7);
+	label(fit("M closes the map", lx), lx, ly + 2 * lh, ls, 0.7, 0.7, 0.7);
 
 	gl.MatrixMode(gl.PROJECTION); gl.PopMatrix();
 	gl.MatrixMode(gl.MODELVIEW); gl.PopMatrix();
@@ -298,7 +323,7 @@ function draw() {
 
 /* ------------------------------ the map in the page's panel ------------------------------ */
 
-let panelCanvas = null, panelKey = "";
+let panelCanvas = null, panelButton = null, panelKey = "";
 const PANEL_FONT = "11px ui-monospace, Menlo, Consolas, monospace", LINE = 15;
 
 // In a browser: the current level's map at the bottom of the page's panel for
@@ -308,13 +333,20 @@ const PANEL_FONT = "11px ui-monospace, Menlo, Consolas, monospace", LINE = 15;
 function panel(on) {
 	if (!a8.panel) return;
 	if (!on) {
-		if (panelCanvas !== null) { panelCanvas.remove(); panelCanvas = null; panelKey = ""; }
+		if (panelCanvas !== null) { panelCanvas.remove(); panelButton.remove(); panelCanvas = panelButton = null; panelKey = ""; }
 		return;
 	}
 	if (panelCanvas === null) {
 		panelCanvas = document.createElement("canvas");
 		panelCanvas.style.cssText = "display: block; width: 100%; margin-top: 10px; image-rendering: pixelated;";
 		a8.panel.append(panelCanvas);
+		panelButton = document.createElement("button");
+		panelButton.textContent = "Clear the whole map";
+		panelButton.addEventListener("click", () => {
+			if (confirm(`Forget the whole map of ${characterName()}: every level, the marks and the names?`)) clear();
+			panelButton.blur();
+		});
+		a8.panel.append(panelButton);
 	}
 	const s = record(), level = mem[LEVEL], width = panelCanvas.clientWidth || 256;
 	const key = `${level}:${mem[CELL_X]}:${mem[CELL_Y]}:${mem[FACING] & 3}:${version}:${width}:${mem[SECRET_DOORS_SHOWN] & 0x80}`;
@@ -384,8 +416,9 @@ export const automap = {
 	hooks: [KEY_DISPATCH],
 
 	// The main loop fetched a command letter into A: M toggles the map over
-	// the screen, a digit marks the player's cell while a map is shown;
-	// neither is a game command
+	// the screen, a digit marks the player's cell while a map is shown, and X
+	// twice within three seconds, with the map over the screen, clears the
+	// whole map; none is a game command (the game's are C D E U P G S Q)
 	onCodeInjection(pc, op) {
 		if (pc !== KEY_DISPATCH) return op;
 		const key = a8.cpu.a;
@@ -394,10 +427,15 @@ export const automap = {
 			const i = cellIndex(mem[LEVEL], mem[CELL_X], mem[CELL_Y]);
 			if (i >= 0) put(i, (record()[i] & ~MARK) | (key - 0x30));
 		}
+		else if (this.shown && key === 0x78) {
+			if (clearArmed > 0) { clear(); clearArmed = 0; }
+			else clearArmed = CLEAR_ARMED_FRAMES;
+		}
 		return op;
 	},
 
 	track,
 	draw,
 	panel,
+	clear,
 };

@@ -111,8 +111,10 @@ These games are also discussed in [this video on YouTube](https://www.youtube.co
   * an automatic map ([altreal/automap.js](ext/altreal/automap.js)): the cells visited and seen are
     remembered, the M key shows the level's map with walls, doors, arches, the player, the kinds
     of the cells named from the game's own location line, and marks set with the digit keys; the
+    map lies over the picture as it is, without shading it; X twice forgets the whole map; the
     record is a file per character in `ext/altreal/maps/`, so it survives states and restarts;
-    in a browser "Show map" keeps the map at the bottom of the page's panel beside the screen
+    in a browser "Show map" keeps the map at the bottom of the page's panel beside the screen,
+    with a button that clears it
   * no disk swapping: boot from side 1 as usual, then the game's sector reads are served from the
     five disk images placed in `ext/altreal/` ([altreal/disks.js](ext/altreal/disks.js)), so "Please
     insert Disk..." never comes up (the game only ever reads)
