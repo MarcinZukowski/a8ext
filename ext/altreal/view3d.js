@@ -33,6 +33,21 @@ const SECRET_DOORS_SHOWN = 0x1957;     // bit 7: wall types 5 and 6 are drawn wi
 // half of the picture and the floor colour in the lower half
 const COLOUR_PF0 = 0x18BA, COLOUR_PF1 = 0x18BB, COLOUR_PF2 = 0x18BC;
 const COLOUR_CEILING = 0x18BD, COLOUR_FLOOR = 0x18BE;
+// Light. The game's renderer ($770E, $7736, $77A5) tests (($194D & 1) | $6390):
+// bit 0 of the area byte says the area is lit, $6390 that a torch burns. With
+// either it loads the area's colours ($194E-$1952) into the registers above,
+// with neither it zeroes them and the picture is black. So the view goes dark
+// with the game by itself (the textures are built from the registers); what
+// this adds is the torch: in a dark area lit only by it, the light flickers
+// and fades with the distance from the player
+const AREA_FLAGS = 0x194D, TORCH_LIT = 0x6390;
+const torchLight = () => (mem[AREA_FLAGS] & 1) === 0 && mem[TORCH_LIT] !== 0;
+// The torch is a light at the player: a vertex is lit by the ambient glow
+// plus the flame's intensity falling off with its distance from the eye,
+// nothing of it left at TORCH_REACH cells. The flame's flicker changes the
+// intensity, so the near walls show it in full and the far end hardly at all
+const TORCH_REACH = 7, TORCH_AMBIENT = 0.04;
+const falloff = (cells) => Math.pow(Math.max(0, 1 - cells / TORCH_REACH), 1.5);   // a cell away 0.79, three 0.45, five 0.18
 
 // The game's screen, in pixels of the displayed area (336 x 240, y down): the
 // picture, the text rows above it (name, stats, experience, the message),
@@ -197,6 +212,22 @@ function makeTexture(size, f) {
 	return t;
 }
 
+/* ------------------------------ the torch ------------------------------ */
+
+// A flame's flicker: two slow waves that never line up, and a breath of air
+// now and then (a random dip the flame recovers from), smoothed. Returns the
+// flame's intensity, around 0.9, between about 0.7 and 1: it shows on what
+// is near the player, where the light is this intensity times the surface
+let flickerFrame = 0, flickerDip = 0, flickerTarget = 0;
+function torchFlicker() {
+	flickerFrame++;
+	if (flickerFrame % 6 === 0) flickerTarget = Math.random() < 0.3 ? 0.06 + Math.random() * 0.14 : 0;
+	flickerDip += (flickerTarget - flickerDip) * 0.3;
+	const t = flickerFrame / 60;
+	const waves = (Math.sin(t * 9.7) + Math.sin(t * 6.3 + 2)) / 4;   // -0.5..0.5
+	return 0.94 + 0.1 * waves - flickerDip;
+}
+
 function makePlanes() {
 	const S = 64;
 	// Floor and ceiling: rough stone, without lines that would show how the
@@ -319,6 +350,9 @@ function halfHeight(d) {
 
 // The eye: position and the sines of its yaw, set once per frame
 const eye = { x: 0, z: 0, sin: 0, cos: 1 };
+// The torch's light while it is the light: each vertex gets its own colour,
+// the surface's base colour times the light reaching it
+const light = { on: false, intensity: 1, colour: [1, 1, 1] };
 
 // A world point to picture coordinates: x, y in pixels (y down) and its
 // distance along the view. The scale at a distance is the wall half-height
@@ -333,6 +367,11 @@ function project(wx, wy, wz) {
 
 function vertex(u, v, wx, wy, wz) {
 	const [x, y, d] = project(wx, wy, wz);
+	if (light.on) {
+		const dx = wx - eye.x, dy = wy - EYE_HEIGHT, dz = wz - eye.z;
+		const b = TORCH_AMBIENT + light.intensity * falloff(Math.sqrt(dx * dx + dy * dy + dz * dz) / CELL);
+		gl.Color4f(light.colour[0] * b, light.colour[1] * b, light.colour[2] * b, 1);
+	}
 	gl.TexCoord2f(u, v);
 	gl.Vertex3f(x, y, -d);   // the depth buffer and the fog see the distance
 }
@@ -414,8 +453,8 @@ function drawWalls(textures, cx, cy) {
 		}
 		// east/west facing walls a little darker than north/south ones
 		const shade = ew ? 0.78 : 1.0;
-		if (isLocked(type)) gl.Color4f(0.9 * shade, 0.55 * shade, 0.5 * shade, 1);
-		else gl.Color4f(shade, shade, shade, 1);
+		light.colour = isLocked(type) ? [0.9 * shade, 0.55 * shade, 0.5 * shade] : [shade, shade, shade];
+		gl.Color4f(light.colour[0], light.colour[1], light.colour[2], 1);
 		wallQuad(x0, z0, x1, z1);
 	}
 	gl.Disable(gl.BLEND);
@@ -506,10 +545,10 @@ function buildSprites(smooth) {
 
 // Draws the overlay over the whole picture, in front of everything (the
 // game gives the players priority over the playfield)
-function drawSprites() {
+function drawSprites(brightness = 1) {
 	gl.Disable(gl.DEPTH_TEST); gl.Disable(gl.FOG); gl.Enable(gl.BLEND);
 	gl.BindTexture(gl.TEXTURE_2D, spriteTexture.id);
-	gl.Color4f(1, 1, 1, 1);
+	gl.Color4f(brightness, brightness, brightness, 1);
 	gl.Begin(gl.QUADS);
 	gl.TexCoord2f(0, 0); gl.Vertex3f(0, 0, -1);
 	gl.TexCoord2f(1, 0); gl.Vertex3f(PIC, 0, -1);
@@ -542,7 +581,7 @@ export function createView3D() {
 
 	return {
 		// Settings the menu changes
-		options: { smoothTextures: true, wide: false },
+		options: { smoothTextures: true, wide: false, torch: true },
 
 		// The wide layout, after render(): black bands, the game's texts and
 		// compass shrunk into them, and, when the view was not drawn (a
@@ -666,23 +705,35 @@ export function createView3D() {
 			gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 			gl.Enable(gl.DEPTH_TEST);
 			gl.Disable(gl.CULL_FACE);
-			gl.Enable(gl.FOG);
-			gl.Fogf(gl.FOG_MODE, gl.LINEAR);
-			gl.Fogf(gl.FOG_START, CELL * 1.5);
-			gl.Fogf(gl.FOG_END, CELL * (VIEW_RANGE - 1));
-			gl.Fogfv(gl.FOG_COLOR, [0, 0, 0, 1]);
+			// The light: the fog over the far cells, or, in a dark area lit
+			// by the player's torch, the torch's light from the player's
+			// position, per vertex, with the flame's flicker in its intensity
+			light.on = this.options.torch && torchLight();
+			light.intensity = light.on ? torchFlicker() : 1;
+			if (light.on)
+				gl.Disable(gl.FOG);
+			else {
+				gl.Enable(gl.FOG);
+				gl.Fogf(gl.FOG_MODE, gl.LINEAR);
+				gl.Fogf(gl.FOG_START, CELL * 1.5);
+				gl.Fogf(gl.FOG_END, CELL * (VIEW_RANGE - 1));
+				gl.Fogfv(gl.FOG_COLOR, [0, 0, 0, 1]);
+			}
 
 			// Floor and ceiling in the game's colours, then the walls
 			const [fr, fg, fb] = a8.rgb(mem[COLOUR_FLOOR]), [cr, cg, cb] = a8.rgb(mem[COLOUR_CEILING]);
+			light.colour = [fr / 255, fg / 255, fb / 255];
 			gl.Color4f(fr / 255, fg / 255, fb / 255, 1);
 			gl.BindTexture(gl.TEXTURE_2D, planes.floor.id);
 			plane(0, cx, cy);
+			light.colour = [cr / 255, cg / 255, cb / 255];
 			gl.Color4f(cr / 255, cg / 255, cb / 255, 1);
 			gl.BindTexture(gl.TEXTURE_2D, planes.ceiling.id);
 			plane(CELL, cx, cy);
 			drawWalls(textures, cx, cy);
 			if (buildSprites(this.options.smoothTextures))
-				drawSprites();
+				drawSprites(light.on ? TORCH_AMBIENT + light.intensity * falloff(1) : 1);   // a monster: a cell away, say
+			light.on = false;
 
 			gl.Disable(gl.FOG);
 			gl.Disable(gl.DEPTH_TEST);

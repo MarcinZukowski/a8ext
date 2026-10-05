@@ -69,6 +69,7 @@ export default {
 		PICTURES: { label: "Smooth pictures:", options: ["OFF", "ON"], current: 1 },
 		// Wide: the view over the whole width, the texts shrunk above and below
 		LAYOUT: { label: "Layout:", options: ["Game", "Wide"], current: 1 },
+		TORCH: { label: "Torch light:", options: ["OFF", "ON"], current: 1 },   // flickers and fades with distance, in dark areas
 		// Automatic: the five disk sides are read from the .atr files next to
 		// this script, and the game never asks for a disk (disks.js)
 		DISKS: { label: "Disk swaps:", options: ["Manual", "Automatic"], current: 1 },
@@ -85,6 +86,7 @@ export default {
 	onPostGlFrame() {
 		view3d.options.smoothTextures = this.menu.TEXTURES.current === 1;
 		view3d.options.wide = this.menu.LAYOUT.current === 1;
+		view3d.options.torch = this.menu.TORCH.current === 1;
 		let drawn = false;
 		if (this.menu.VIEW3D.current === 1)
 			drawn = view3d.render(this.smoothActive() ? movesPerSecond : GAME_STEPS_PER_SECOND);

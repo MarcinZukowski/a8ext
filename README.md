@@ -101,7 +101,10 @@ These games are also discussed in [this video on YouTube](https://www.youtube.co
     (so the picture flashes when the game flashes it), optionally upscaled 4x with Scale2x
     (the monster sprites too), and
     arches open onto what lies beyond. A wide layout puts the view over the whole width with the
-    game's texts and compass shrunk above and below it
+    game's texts and compass shrunk above and below it. In a dark area lit only by the player's
+    torch (the game's own test), the torch is a light at the player's position: it falls off with
+    the distance, so what is near is light and the corridor's end dark, and its flame flickers a
+    little, which shows on the near walls ("Torch light")
   * the game's own pictures, shop interiors and the Atari view, smoothed the same way
     ([altreal/smooth2d.js](ext/altreal/smooth2d.js)): read back from the framebuffer at the game's
     pixel grid, upscaled and drawn over their place

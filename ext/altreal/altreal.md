@@ -58,6 +58,15 @@ screen line 0).
   mortar (COLPF0), stones (COLPF1), brick edging (COLPF2), ceiling, floor.
   In the starting corridor: `$00 $0A $24 $28 $06` (black, grey, dark red,
   brown, dark grey). `$18BF` (COLPF3) is `$00`.
+* Light: the renderer's frame routine (`$770E`, `$7736`, `$77A5`) tests
+  `($194D & 1) | $6390`: bit 0 of the area byte `$194D` means the area is
+  lit, `$6390` that a torch burns. With either it copies the area's colours
+  `$194E`-`$1952` into the registers above (`$77EE`), with neither it zeroes
+  them (`$77E5`) and the picture is black. *Measured*: ar-dark.a8s, in the
+  sewers with a torch lit, has `$194D` = 0, `$6390` = 1, `$639D` = 62
+  (likely the torch's time left; not followed); ar.a8s, at the entrance,
+  `$194D` = 5, `$6390` = 0. The game draws the same picture whether the
+  light is the area's or the torch's: no shorter view in the dark.
 * The colours belong to the zone of the dungeon the player is in.
   `$7E6C`-`$7E9F`: a table at `$AF03`/`$AF05` maps where the player is to a
   zone number, kept at `$1912`; the zone times 8 indexes 8-byte records at
@@ -336,7 +345,17 @@ so that both pictures agree: the wall corners are projected with the depth
 law above (the scale at a distance is the half-height over 18 units, across
 as well as up), drawn in the 72 x 72 picture space that the viewport shows
 2:1, with the distance in the depth buffer and the fog. Walls seen at an
-angle keep a height per end and a linear texture, as in the game. One
+angle keep a height per end and a linear texture, as in the game. The
+textures are built from the colour registers, so the view goes black with
+the game's picture when there is no light; in a dark area lit by the torch
+(the game's test above, "Torch light" on) the fog gives way to a light at
+the player: every vertex gets its colour times the light reaching it, a
+faint ambient 0.04 plus the flame's intensity times (1 - d / 7)^1.5 for
+its distance d in cells from the eye (a cell away 0.79, three 0.45, five
+0.18, seven nothing), so a side wall darkens along its length and a far
+end is black. The flame's flicker (two slow waves and the odd dip,
+intensity 0.7-1, mostly around 0.9) is in that intensity, so the walls
+next to the player show it in full and the far end hardly at all. One
 departure: under the game's law a wall right in front is 70 of the 72
 lines and what is beside it shows at the edges (the game paints the picture
 one flat colour when you touch a wall), so here a wall within two units
