@@ -81,11 +81,25 @@ export function scale2x(src, w, h) {
 // one unused address in codeInjections (the list is replaced at run time).
 // An extension with code injections of its own gives them as options.also,
 // a function returning their addresses, and calls accel.apply() when they
-// change; they come first in onCodeInjection.
+// change; they come first in onCodeInjection, and a hot range that holds
+// one of them is not accelerated (a fake run would pass the hook unseen);
+// options.avoid lists ranges never to accelerate (code that calls into a
+// hooked routine), options.seed ranges known to be hot, accelerated from
+// the start and kept whatever the profiles find (what the player does
+// while a profile is taken decides what it sees: standing still, nothing
+// of the renderer). With options.reprofile very large the first profile is
+// the only one: for a game whose hot code never changes.
 export function createAccelerator(options = {}) {
 	const o = { profileFrames: 150, minShare: 0.004, maxRanges: 16, budget: 2000000, reprofile: 1500, log: true, also: null, ...options };
-	let frame = 0, phase = "profile", since = 0, ranges = [];
+	// options.seed: ranges known in advance ([lo, hi] pairs), accelerated from
+	// the start and kept beside what the profiles find (unless a run of one
+	// waits, which drops it like any other); options.avoid: ranges ([lo, hi])
+	// never to accelerate, say code that calls into a hooked routine (a fake
+	// run would pass the hook unseen) or that waits for the hardware
+	const seeds = (o.seed || []).map(([lo, hi]) => ({ lo, hi, share: 0, seed: true }));
+	let frame = 0, phase = "profile", since = 0, ranges = seeds.slice();
 	const dropped = [];
+	const avoided = (r) => (o.avoid || []).some(([lo, hi]) => r.lo <= hi && r.hi >= lo);
 	const overlaps = (r) => dropped.some((d) => r.lo <= d.hi && r.hi >= d.lo);
 	// Interrupt handlers (an executed RTI) and code timed by WSYNC must run in
 	// real time: their register writes would land at the wrong moment
@@ -114,7 +128,15 @@ export function createAccelerator(options = {}) {
 		}
 		if (lo >= 0) found.push({ lo, hi: last, share: sum / total });
 		found.sort((p, q) => q.share - p.share);
-		return found.filter((r) => r.share >= o.minShare && !overlaps(r) && !timed(r, counts)).slice(0, o.maxRanges);
+		// A range holding one of the extension's own hooks is left alone: a fake
+		// run would pass the hook without calling it
+		const own = o.also ? o.also() : [];
+		const hooked = (r) => own.some((a) => a >= r.lo && a <= r.hi);
+		// the seeds first (less any dropped), then the profile's ranges that lie outside them
+		const kept = seeds.filter((r) => !overlaps(r) && !hooked(r) && !avoided(r));
+		const inSeed = (r) => kept.some((k) => r.lo <= k.hi && r.hi >= k.lo);
+		for (const k of kept) { k.share = 0; for (let a = k.lo; a <= k.hi; a++) k.share += cycles[a] / total; }
+		return kept.concat(found.filter((r) => r.share >= o.minShare && !overlaps(r) && !inSeed(r) && !timed(r, counts) && !hooked(r) && !avoided(r))).slice(0, o.maxRanges);
 	}
 
 	function apply() {
