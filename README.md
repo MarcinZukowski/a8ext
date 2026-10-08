@@ -84,6 +84,37 @@ These games are also discussed in [this video on YouTube](https://www.youtube.co
     with the drawing done here a pass takes two display frames instead of the original's six to
     ten, so the passes are held to 8 a second (the original's pace), 12 (the default), 20, or
     not at all
+* Alternate Reality: The City: [altreal-city/init.js](ext/altreal-city/init.js), [altreal-city.md](ext/altreal-city/altreal-city.md)
+  (new in JavaScript; a different program from the Dungeon's, sharing only ideas and the shared modules)
+  * faster rendering: the profile-driven accelerator of common.js skips the renderer's hottest loops
+  * no disk swapping: the game's own serial protocol is served from the four disk images placed in
+    `ext/altreal-city/` ([altreal-city/disks.js](ext/altreal-city/disks.js)), each sector found by the side's
+    identity the game checks, so "Insert Disk n Side m" never appears; the game's writes (the
+    character is saved on side 3 when a building is left) go into the images too, and the
+    buildings' visit counts are kept in step with the disk so that a saved state can still enter
+    them; the character disk and side 1 stay with the drive
+  * instant loading ([altreal-city/loader.js](ext/altreal-city/loader.js)): a sector's descrambling and
+    checks run on the fake CPU, so a building's "Entering...." takes a few frames
+  * smooth walking ([altreal-city/walk.js](ext/altreal-city/walk.js)): steps of one or two units instead
+    of six, at the game's own speed or 1.5, 2 or 3 times it, one quarter turn per push of the stick
+  * an automatic map ([altreal-city/automap.js](ext/altreal-city/automap.js), the shared
+    [automap.js](ext/automap.js) with the city's addresses): the 64 x 64 city, the cells walked and
+    seen, M for the map over the screen, marks with the digits, X twice to clear it, "Show map" in
+    the browser's panel
+  * the streets drawn with OpenGL ([altreal-city/view3d.js](ext/altreal-city/view3d.js)): the buildings as
+    walls on the map's cells with the game's own facade pictures (stone, the door with each building's
+    sign, the colonnade), optionally smoothed 4x, the sky and the ground in the game's colours of the
+    moment (sampled from its picture line by line, so the time of day comes through), the skyline on
+    the horizon, the game's projection and its mirrored lower half (or the facade over the whole
+    wall), the sky and the ground as the game's bands, a smooth gradient or a cobbled plane, the
+    encounters' monsters over it, the sun or star in the sky and the waterfall on the skyline (the
+    game's second player, shown where its picture lets it through), the rain's drops when it rains (with
+    the game's flickering sky or a calm one), and the eye walking at an even speed between the game's positions (depth by one
+    exponential law, or the game's own linear-per-cell one, which makes a step feel quick, then
+    slow); a wide layout puts the view over the whole width with the game's texts shrunk above
+    and below it
+  * the game's own pictures (the Atari view, a building) smoothed the same way
+    ([altreal-city/smooth2d.js](ext/altreal-city/smooth2d.js))
 * Zybex: [zybex/init.js](ext/zybex/init.js), [zybex.md](ext/zybex/zybex.md) (originally in C, now JavaScript)
   * scrolling background (grayscale and color modes)
 * Behind Jaggi Lines: [bjl/init.js](ext/bjl/init.js) (originally in C, now JavaScript)
@@ -108,7 +139,8 @@ These games are also discussed in [this video on YouTube](https://www.youtube.co
   * the game's own pictures, shop interiors and the Atari view, smoothed the same way
     ([altreal/smooth2d.js](ext/altreal/smooth2d.js)): read back from the framebuffer at the game's
     pixel grid, upscaled and drawn over their place
-  * an automatic map ([altreal/automap.js](ext/altreal/automap.js)): the cells visited and seen are
+  * an automatic map ([altreal/automap.js](ext/altreal/automap.js), the shared [automap.js](ext/automap.js)
+    with the game's addresses): the cells visited and seen are
     remembered, the M key shows the level's map with walls, doors, arches, the player, the kinds
     of the cells named from the game's own location line, and marks set with the digit keys; the
     map lies over the picture as it is, without shading it; X twice forgets the whole map; the

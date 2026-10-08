@@ -8,3 +8,5 @@ ext/altreal/maps/
 *.pdf
 
 .DS_Store
+ext/altreal-city/*.atr
+ext/altreal-city/maps/
