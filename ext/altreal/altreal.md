@@ -178,7 +178,8 @@ changes. The wide layout is on by default.
 
 ## The automatic map
 
-automap.js keeps, for each level (`$6315`, 1-7), a byte per cell: bit 7
+automap.js (this directory's adapter over the shared `ext/automap.js`,
+which The City's extension uses too) keeps, for each level (`$6315`, 1-7), a byte per cell: bit 7
 visited, bit 6 seen, bits 0-2 a mark. The record is a 16 KB file per
 character (the name is at `$6321`) in `maps/`, written after two seconds
 without changes or every ten seconds while they go on, so it survives states
